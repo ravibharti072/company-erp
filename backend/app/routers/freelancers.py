@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -103,10 +104,10 @@ def create_freelancer_project(
 
 @router.get("/projects", response_model=list[FreelancerProjectResponse])
 def get_freelancer_projects(
-    company_id: int | None = None,
-    freelancer_user_id: int | None = None,
-    status_filter: str | None = None,
-    payment_status_filter: str | None = None,
+    company_id: Optional[int] = None,
+    freelancer_user_id: Optional[int] = None,
+    status_filter: Optional[str] = None,
+    payment_status_filter: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -479,9 +480,9 @@ def generate_freelancer_payment(
 
 @router.get("/payments", response_model=list[FreelancerPaymentResponse])
 def get_freelancer_payments(
-    company_id: int | None = None,
-    freelancer_user_id: int | None = None,
-    status_filter: str | None = None,
+    company_id: Optional[int] = None,
+    freelancer_user_id: Optional[int] = None,
+    status_filter: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):

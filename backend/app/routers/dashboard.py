@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -19,7 +20,7 @@ router = APIRouter(
 
 @router.get("/dashboard-summary")
 def get_dashboard_summary(
-    company_id: int | None = None,
+    company_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -59,7 +60,7 @@ def get_dashboard_summary(
                 models.FreelancerPayment.company_id == target_company_id
             )
 
-    elif current_user.role in ["company-admin", "hr", "manager", "accountant"]:
+    elif current_user.role in ["company-admin", "admin", "owner", "hr", "manager", "accountant"]:
         target_company_id = current_user.company_id
 
         if not target_company_id:
@@ -188,12 +189,12 @@ def get_dashboard_summary(
     ).all()
 
     pending_commission_amount = round(
-        sum(item.commission_amount for item in pending_commissions),
+        sum(item.commission_amount or 0 for item in pending_commissions),
         2,
     )
 
     paid_commission_amount = round(
-        sum(item.commission_amount for item in paid_commissions),
+        sum(item.commission_amount or 0 for item in paid_commissions),
         2,
     )
 
@@ -216,12 +217,12 @@ def get_dashboard_summary(
     ).all()
 
     pending_freelancer_payment_amount = round(
-        sum(item.amount for item in pending_freelancer_payments),
+        sum(item.amount or 0 for item in pending_freelancer_payments),
         2,
     )
 
     paid_freelancer_payment_amount = round(
-        sum(item.amount for item in paid_freelancer_payments),
+        sum(item.amount or 0 for item in paid_freelancer_payments),
         2,
     )
 

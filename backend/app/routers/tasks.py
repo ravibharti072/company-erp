@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -130,9 +131,9 @@ def create_task(
 
 @router.get("", response_model=list[TaskResponse])
 def get_tasks(
-    company_id: int | None = None,
-    assigned_to_user_id: int | None = None,
-    status_filter: str | None = None,
+    company_id: Optional[int] = None,
+    assigned_to_user_id: Optional[int] = None,
+    status_filter: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):

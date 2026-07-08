@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 
 from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -91,7 +92,7 @@ DEFAULT_PORTAL_ACCESS_BY_ROLE = {
 # NORMALIZERS
 # ---------------------------------------------------------
 
-def normalize_role(role: str | None):
+def normalize_role(role: Optional[str]):
     return (
         str(role or "")
         .strip()
@@ -101,7 +102,7 @@ def normalize_role(role: str | None):
     )
 
 
-def normalize_portal(portal: str | None):
+def normalize_portal(portal: Optional[str]):
     return (
         str(portal or "")
         .strip()
@@ -111,7 +112,7 @@ def normalize_portal(portal: str | None):
     )
 
 
-def parse_portal_access(value, role: str | None = None) -> list[str]:
+def parse_portal_access(value, role: Optional[str] = None) -> list[str]:
     if value is None or value == "":
         return DEFAULT_PORTAL_ACCESS_BY_ROLE.get(
             normalize_role(role),
@@ -148,7 +149,7 @@ def parse_portal_access(value, role: str | None = None) -> list[str]:
     return cleaned_access
 
 
-def encode_portal_access(value, role: str | None = None) -> str:
+def encode_portal_access(value, role: Optional[str] = None) -> str:
     return json.dumps(parse_portal_access(value, role))
 
 

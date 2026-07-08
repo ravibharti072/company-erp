@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import and_, or_
@@ -136,7 +137,7 @@ PAYMENT_METHODS = {
 # HELPERS
 # -----------------------------
 
-def normalize_status(value: str | None, default: str = "new") -> str:
+def normalize_status(value: Optional[str], default: str = "new") -> str:
     if not value:
         return default
 
@@ -151,7 +152,7 @@ def normalize_status(value: str | None, default: str = "new") -> str:
     return cleaned
 
 
-def normalize_service_type(value: str | None) -> str:
+def normalize_service_type(value: Optional[str]) -> str:
     if not value:
         return "custom_software"
 
@@ -178,7 +179,7 @@ def normalize_service_type(value: str | None) -> str:
     return cleaned
 
 
-def normalize_project_type(value: str | None) -> str:
+def normalize_project_type(value: Optional[str]) -> str:
     cleaned = normalize_service_type(value)
 
     if cleaned not in CRM_PROJECT_TYPES:
@@ -187,7 +188,7 @@ def normalize_project_type(value: str | None) -> str:
     return cleaned
 
 
-def normalize_priority(value: str | None) -> str:
+def normalize_priority(value: Optional[str]) -> str:
     if not value:
         return "medium"
 
@@ -199,7 +200,7 @@ def normalize_priority(value: str | None) -> str:
     return cleaned
 
 
-def normalize_payment_type(value: str | None) -> str:
+def normalize_payment_type(value: Optional[str]) -> str:
     if not value:
         return "lead_payment"
 
@@ -225,7 +226,7 @@ def normalize_payment_type(value: str | None) -> str:
     return cleaned
 
 
-def normalize_payment_method(value: str | None) -> str:
+def normalize_payment_method(value: Optional[str]) -> str:
     if not value:
         return "cash"
 
@@ -667,10 +668,10 @@ def create_sales_lead(
 
 @router.get("/leads", response_model=list[SalesLeadResponse])
 def get_sales_leads(
-    company_id: int | None = None,
-    sales_rep_user_id: int | None = None,
-    status_filter: str | None = None,
-    service_type: str | None = None,
+    company_id: Optional[int] = None,
+    sales_rep_user_id: Optional[int] = None,
+    status_filter: Optional[str] = None,
+    service_type: Optional[str] = None,
     active_only: bool = True,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -1228,9 +1229,9 @@ def create_received_payment(
 
 @router.get("/payments", response_model=list[ReceivedPaymentResponse])
 def get_received_payments(
-    company_id: int | None = None,
-    lead_id: int | None = None,
-    payment_type: str | None = None,
+    company_id: Optional[int] = None,
+    lead_id: Optional[int] = None,
+    payment_type: Optional[str] = None,
     active_only: bool = True,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -1292,7 +1293,7 @@ def get_received_payments(
 
 @router.get("/payments/summary", response_model=ReceivedPaymentSummaryResponse)
 def get_received_payment_summary(
-    company_id: int | None = None,
+    company_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -1657,10 +1658,10 @@ def create_crm_project(
 
 @router.get("/projects", response_model=list[CRMProjectResponse])
 def get_crm_projects(
-    company_id: int | None = None,
-    status_filter: str | None = None,
-    project_type: str | None = None,
-    lead_id: int | None = None,
+    company_id: Optional[int] = None,
+    status_filter: Optional[str] = None,
+    project_type: Optional[str] = None,
+    lead_id: Optional[int] = None,
     active_only: bool = True,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -1852,9 +1853,9 @@ def delete_crm_project(
 
 @router.get("/commissions", response_model=list[SalesCommissionResponse])
 def get_sales_commissions(
-    company_id: int | None = None,
-    sales_rep_user_id: int | None = None,
-    status_filter: str | None = None,
+    company_id: Optional[int] = None,
+    sales_rep_user_id: Optional[int] = None,
+    status_filter: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -1955,7 +1956,7 @@ def update_sales_commission(
 
 @router.get("/summary", response_model=CRMSummaryResponse)
 def get_crm_summary(
-    company_id: int | None = None,
+    company_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):

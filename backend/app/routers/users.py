@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -141,7 +142,7 @@ def get_default_portal_access(role: str) -> list[str]:
     )
 
 
-def encode_portal_access(value, role: str | None = None) -> str:
+def encode_portal_access(value, role: Optional[str] = None) -> str:
     cleaned = clean_portal_access(value)
 
     if not cleaned and role:
@@ -155,7 +156,7 @@ def encode_portal_access(value, role: str | None = None) -> str:
 # ---------------------------------------------------------
 
 def get_company_id_for_person(
-    person_company_id: int | None,
+    person_company_id: Optional[int],
     current_user: models.User,
     db: Session,
 ) -> int:
@@ -213,7 +214,6 @@ def check_user_access(user: models.User, current_user: models.User):
 # PEOPLE / ONBOARDING ROUTES
 # ---------------------------------------------------------
 
-
 @router.post("/people", response_model=PersonResponse)
 def create_person(
     person: PersonCreate,
@@ -255,10 +255,10 @@ def create_person(
 
 @router.get("/people", response_model=list[PersonResponse])
 def get_people(
-    company_id: int | None = None,
-    person_type: str | None = None,
-    status: str | None = None,
-    is_active: bool | None = None,
+    company_id: Optional[int] = None,
+    person_type: Optional[str] = None,
+    status: Optional[str] = None,
+    is_active: Optional[bool] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(
         require_roles(["super-admin", "company-admin", "hr", "manager", "accountant"])
@@ -382,7 +382,6 @@ def delete_person(
 # ---------------------------------------------------------
 # SOFTWARE USER ROUTES
 # ---------------------------------------------------------
-
 
 @router.post("/users", response_model=UserResponse)
 def create_user(
@@ -522,9 +521,9 @@ def create_user(
 
 @router.get("/users", response_model=list[UserResponse])
 def get_users(
-    company_id: int | None = None,
-    role: str | None = None,
-    is_active: bool | None = None,
+    company_id: Optional[int] = None,
+    role: Optional[str] = None,
+    is_active: Optional[bool] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(
         require_roles(["super-admin", "company-admin", "hr", "manager", "accountant"])

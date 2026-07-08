@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -96,7 +97,7 @@ DEFAULT_PORTAL_ACCESS_BY_ROLE = {
 }
 
 
-def normalize_role_value(value: str | None) -> str:
+def normalize_role_value(value: Optional[str]) -> str:
     return (
         str(value or "")
         .strip()
@@ -106,7 +107,7 @@ def normalize_role_value(value: str | None) -> str:
     )
 
 
-def parse_portal_access(value, role: str | None = None) -> list[str]:
+def parse_portal_access(value, role: Optional[str] = None) -> list[str]:
     if value is None or value == "":
         return DEFAULT_PORTAL_ACCESS_BY_ROLE.get(
             normalize_role_value(role),
@@ -143,7 +144,7 @@ def parse_portal_access(value, role: str | None = None) -> list[str]:
     return cleaned_access
 
 
-def encode_portal_access(value, role: str | None = None) -> str:
+def encode_portal_access(value, role: Optional[str] = None) -> str:
     return json.dumps(parse_portal_access(value, role))
 
 

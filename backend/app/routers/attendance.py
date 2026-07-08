@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -109,9 +110,9 @@ def check_out(
 
 @router.get("", response_model=list[AttendanceResponse])
 def get_attendance_records(
-    company_id: int | None = None,
-    user_id: int | None = None,
-    attendance_date: date | None = None,
+    company_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    attendance_date: Optional[date] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
