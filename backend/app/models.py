@@ -36,8 +36,11 @@ class Company(Base):
 
     sales_leads = relationship("SalesLead", back_populates="company")
     sales_commissions = relationship("SalesCommission", back_populates="company")
+    commission_payments = relationship("CommissionPayment", back_populates="company")
     received_payments = relationship("ReceivedPayment", back_populates="company")
     crm_projects = relationship("CRMProject", back_populates="company")
+    software_products = relationship("SoftwareProduct", back_populates="company")
+    project_issues = relationship("ProjectIssue", back_populates="company")
 
     freelancer_projects = relationship("FreelancerProject", back_populates="company")
     freelancer_payments = relationship("FreelancerPayment", back_populates="company")
@@ -144,6 +147,12 @@ class User(Base):
         back_populates="sales_rep_user",
     )
 
+    paid_commission_payments = relationship(
+        "CommissionPayment",
+        back_populates="paid_by_user",
+        foreign_keys="CommissionPayment.paid_by_user_id",
+    )
+
     created_received_payments = relationship(
         "ReceivedPayment",
         back_populates="created_by_user",
@@ -160,6 +169,12 @@ class User(Base):
         "CRMProject",
         back_populates="created_by_user",
         foreign_keys="CRMProject.created_by_user_id",
+    )
+
+    created_project_issues = relationship(
+        "ProjectIssue",
+        back_populates="created_by_user",
+        foreign_keys="ProjectIssue.created_by_user_id",
     )
 
     freelancer_projects = relationship(
@@ -247,12 +262,67 @@ class Task(Base):
     )
 
 
+class SoftwareProduct(Base):
+    __tablename__ = "software_products"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    source_project_id = Column(Integer, ForeignKey("crm_projects.id"), nullable=True)
+
+    software_name = Column(String, nullable=False)
+    software_type = Column(String, nullable=False, default="existing_software")
+    description = Column(Text, nullable=True)
+
+    base_price = Column(Float, nullable=False, default=0)
+    setup_charge = Column(Float, nullable=True, default=0)
+
+    recurring_amount = Column(Float, nullable=True)
+    recurring_cycle = Column(String, nullable=True)
+
+    version = Column(String, nullable=True)
+    demo_url = Column(Text, nullable=True)
+    documentation_url = Column(Text, nullable=True)
+
+    status = Column(String, default="active")
+    notes = Column(Text, nullable=True)
+
+    is_active = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    company = relationship("Company", back_populates="software_products")
+
+    source_project = relationship(
+        "CRMProject",
+        back_populates="created_software_product",
+        foreign_keys=[source_project_id],
+    )
+
+    sales_leads = relationship(
+        "SalesLead",
+        back_populates="software_product",
+    )
+
+    crm_projects = relationship(
+        "CRMProject",
+        back_populates="software_product",
+        foreign_keys="CRMProject.software_product_id",
+    )
+
+
 class SalesLead(Base):
     __tablename__ = "sales_leads"
 
     id = Column(Integer, primary_key=True, index=True)
 
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    software_product_id = Column(Integer, ForeignKey("software_products.id"), nullable=True)
 
     sales_rep_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
@@ -306,6 +376,11 @@ class SalesLead(Base):
 
     company = relationship("Company", back_populates="sales_leads")
 
+    software_product = relationship(
+        "SoftwareProduct",
+        back_populates="sales_leads",
+    )
+
     sales_rep_user = relationship(
         "User",
         back_populates="sales_leads",
@@ -346,8 +421,9 @@ class SalesCommission(Base):
     lead_id = Column(Integer, ForeignKey("sales_leads.id"), nullable=False)
 
     sale_amount = Column(Float, nullable=False)
-    commission_percentage = Column(Float, nullable=False)
-    commission_amount = Column(Float, nullable=False)
+    commission_percentage = Column(Float, nullable=False, default=0)
+    commission_amount = Column(Float, nullable=False, default=0)
+    paid_amount = Column(Float, nullable=False, default=0)
 
     status = Column(String, default="pending")
 
@@ -373,6 +449,50 @@ class SalesCommission(Base):
     lead = relationship(
         "SalesLead",
         back_populates="commission",
+    )
+
+    payments = relationship(
+        "CommissionPayment",
+        back_populates="commission",
+    )
+
+
+class CommissionPayment(Base):
+    __tablename__ = "commission_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    commission_id = Column(Integer, ForeignKey("sales_commissions.id"), nullable=False)
+    paid_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    amount = Column(Float, nullable=False)
+
+    payment_date = Column(Date, default=date.today, nullable=False)
+    payment_method = Column(String, nullable=False, default="cash")
+
+    remarks = Column(Text, nullable=True)
+
+    is_active = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    company = relationship("Company", back_populates="commission_payments")
+
+    commission = relationship(
+        "SalesCommission",
+        back_populates="payments",
+    )
+
+    paid_by_user = relationship(
+        "User",
+        back_populates="paid_commission_payments",
+        foreign_keys=[paid_by_user_id],
     )
 
 
@@ -432,6 +552,7 @@ class CRMProject(Base):
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
 
     lead_id = Column(Integer, ForeignKey("sales_leads.id"), nullable=True)
+    software_product_id = Column(Integer, ForeignKey("software_products.id"), nullable=True)
 
     assigned_to_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
@@ -460,6 +581,7 @@ class CRMProject(Base):
 
     admin_remarks = Column(Text, nullable=True)
 
+    converted_to_software_product = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -476,6 +598,24 @@ class CRMProject(Base):
         back_populates="crm_projects",
     )
 
+    software_product = relationship(
+        "SoftwareProduct",
+        back_populates="crm_projects",
+        foreign_keys=[software_product_id],
+    )
+
+    created_software_product = relationship(
+        "SoftwareProduct",
+        back_populates="source_project",
+        uselist=False,
+        foreign_keys="SoftwareProduct.source_project_id",
+    )
+
+    project_issues = relationship(
+        "ProjectIssue",
+        back_populates="project",
+    )
+
     assigned_to_user = relationship(
         "User",
         back_populates="assigned_crm_projects",
@@ -485,6 +625,48 @@ class CRMProject(Base):
     created_by_user = relationship(
         "User",
         back_populates="created_crm_projects",
+        foreign_keys=[created_by_user_id],
+    )
+
+
+class ProjectIssue(Base):
+    __tablename__ = "project_issues"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    project_id = Column(Integer, ForeignKey("crm_projects.id"), nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    issue_type = Column(String, nullable=False, default="project_issue")
+
+    title = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+
+    priority = Column(String, default="medium")
+    status = Column(String, default="open")
+
+    remarks = Column(Text, nullable=True)
+
+    is_active = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    company = relationship("Company", back_populates="project_issues")
+
+    project = relationship(
+        "CRMProject",
+        back_populates="project_issues",
+    )
+
+    created_by_user = relationship(
+        "User",
+        back_populates="created_project_issues",
         foreign_keys=[created_by_user_id],
     )
 

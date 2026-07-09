@@ -8,6 +8,8 @@ import {
   Clock3,
   IndianRupee,
   LayoutDashboard,
+  PackageCheck,
+  Percent,
   Settings,
   Target,
   UserCheck,
@@ -30,10 +32,11 @@ const ALL_PORTALS = [
   "attendance",
   "tasks",
   "sales",
+  "software-products",
   "receive-payment",
+  "sales-commission",
   "projects",
   "maintenance",
-  "freelancers",
   "reports",
   "settings",
 ];
@@ -48,7 +51,6 @@ const DEFAULT_PORTAL_ACCESS_BY_ROLE = {
     "users",
     "attendance",
     "tasks",
-    "freelancers",
     "reports",
     "settings",
   ],
@@ -58,10 +60,11 @@ const DEFAULT_PORTAL_ACCESS_BY_ROLE = {
     "attendance",
     "tasks",
     "sales",
+    "software-products",
     "receive-payment",
+    "sales-commission",
     "projects",
     "maintenance",
-    "freelancers",
     "reports",
     "settings",
   ],
@@ -72,7 +75,9 @@ const DEFAULT_PORTAL_ACCESS_BY_ROLE = {
     "attendance",
     "tasks",
     "sales",
+    "software-products",
     "receive-payment",
+    "sales-commission",
     "maintenance",
     "settings",
   ],
@@ -147,17 +152,21 @@ function canAccessPortal(user, portalKey) {
     return true;
   }
 
-  const effectivePortal =
-    normalizedPortal === "receive-payment" || normalizedPortal === "maintenance"
-      ? "sales"
-      : normalizedPortal;
-
   const portalAccess = parsePortalAccess(user?.portal_access, user?.role);
 
-  return (
-    portalAccess.includes(effectivePortal) ||
-    portalAccess.includes(normalizedPortal)
-  );
+  if (
+    normalizedPortal === "receive-payment" ||
+    normalizedPortal === "maintenance" ||
+    normalizedPortal === "software-products" ||
+    normalizedPortal === "sales-commission"
+  ) {
+    return (
+      portalAccess.includes("sales") ||
+      portalAccess.includes(normalizedPortal)
+    );
+  }
+
+  return portalAccess.includes(normalizedPortal);
 }
 
 export default function DashboardPage() {
@@ -424,11 +433,25 @@ export default function DashboardPage() {
       colorClass: "module-orange",
     },
     {
+      key: "software-products",
+      title: "Software Products",
+      path: "/software-products",
+      icon: PackageCheck,
+      colorClass: "module-cyan",
+    },
+    {
       key: "receive-payment",
       title: "Receive Payment",
       path: "/receive-payment",
       icon: WalletCards,
       colorClass: "module-money",
+    },
+    {
+      key: "sales-commission",
+      title: "Sales Commission",
+      path: "/sales-commission",
+      icon: Percent,
+      colorClass: "module-violet",
     },
     {
       key: "projects",
@@ -443,13 +466,6 @@ export default function DashboardPage() {
       path: "/maintenance",
       icon: Wrench,
       colorClass: "module-maintenance",
-    },
-    {
-      key: "freelancers",
-      title: "Freelancers",
-      path: "/freelancers",
-      icon: UsersRound,
-      colorClass: "module-emerald",
     },
     {
       key: "reports",
@@ -967,11 +983,6 @@ const dashboardStyles = `
   color: #ea580c;
 }
 
-.module-emerald {
-  background: #e9fbf2;
-  color: #10b981;
-}
-
 .module-indigo {
   background: #edf2ff;
   color: #4f46e5;
@@ -1028,9 +1039,9 @@ const dashboardStyles = `
   font-weight: 500;
 }
 
-@media (max-width: 1450px) {
+@media (max-width: 1700px) {
   .overview-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
 

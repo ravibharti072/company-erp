@@ -12,10 +12,11 @@ import UsersPage from "../pages/UsersPage";
 import AttendancePage from "../pages/AttendancePage";
 import TasksPage from "../pages/TasksPage";
 import SalesPage from "../pages/SalesPage";
+import SoftwareProductsPage from "../pages/SoftwareProductsPage";
 import ReceivePaymentPage from "../pages/ReceivePaymentPage";
 import ProjectsPage from "../pages/ProjectsPage";
 import MaintenancePage from "../pages/MaintenancePage";
-import FreelancersPage from "../pages/FreelancersPage";
+import SalesCommissionPage from "../pages/SalesCommissionPage";
 import ReportsPage from "../pages/ReportsPage";
 import SettingsPage from "../pages/SettingsPage";
 
@@ -112,12 +113,13 @@ export default function AppRoutes() {
         <Route path="/tasks" element={<TasksPage />} />
 
         <Route path="/sales" element={<SalesPage />} />
+        <Route path="/software-products" element={<SoftwareProductsPage />} />
         <Route path="/receive-payment" element={<ReceivePaymentPage />} />
+        <Route path="/sales-commission" element={<SalesCommissionPage />} />
 
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/maintenance" element={<MaintenancePage />} />
 
-        <Route path="/freelancers" element={<FreelancersPage />} />
         <Route path="/reports" element={<ReportsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>

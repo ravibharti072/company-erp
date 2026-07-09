@@ -1,7 +1,61 @@
 from datetime import date, datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
+
+
+
+def clean_optional_float(value):
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        cleaned = (
+            value.strip()
+            .replace("₹", "")
+            .replace(",", "")
+        )
+
+        if cleaned == "":
+            return None
+
+        return float(cleaned)
+
+    return value
+
+
+def clean_zero_float(value):
+    if value is None:
+        return 0
+
+    if isinstance(value, str):
+        cleaned = (
+            value.strip()
+            .replace("₹", "")
+            .replace(",", "")
+        )
+
+        if cleaned == "":
+            return 0
+
+        return float(cleaned)
+
+    return value
+
+
+def clean_optional_int(value):
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        cleaned = value.strip()
+
+        if cleaned == "":
+            return None
+
+        return int(cleaned)
+
+    return value
 
 
 # ----------------------------------------
@@ -10,6 +64,7 @@ from pydantic import BaseModel, EmailStr
 
 class SalesLeadCreate(BaseModel):
     sales_rep_user_id: Optional[int] = None
+    software_product_id: Optional[int] = None
 
     client_name: str
     client_phone: Optional[str] = None
@@ -21,7 +76,6 @@ class SalesLeadCreate(BaseModel):
     # Old field kept for compatibility with current frontend/router.
     service_interest: str = "custom_software"
 
-    # New CRM field.
     # Options:
     # custom_software, existing_software, social_media_management,
     # internal_project, other
@@ -61,9 +115,30 @@ class SalesLeadCreate(BaseModel):
     notes: Optional[str] = None
     is_active: bool = True
 
+    @field_validator(
+        "software_product_id",
+        "sales_rep_user_id",
+        mode="before",
+    )
+    @classmethod
+    def validate_optional_ids(cls, value):
+        return clean_optional_int(value)
+
+    @field_validator(
+        "expected_value",
+        "proposal_amount",
+        "final_sale_amount",
+        "recurring_amount",
+        mode="before",
+    )
+    @classmethod
+    def validate_optional_amounts(cls, value):
+        return clean_optional_float(value)
+
 
 class SalesLeadUpdate(BaseModel):
     sales_rep_user_id: Optional[int] = None
+    software_product_id: Optional[int] = None
 
     client_name: Optional[str] = None
     client_phone: Optional[str] = None
@@ -105,6 +180,26 @@ class SalesLeadUpdate(BaseModel):
     notes: Optional[str] = None
     is_active: Optional[bool] = None
 
+    @field_validator(
+        "software_product_id",
+        "sales_rep_user_id",
+        mode="before",
+    )
+    @classmethod
+    def validate_optional_ids(cls, value):
+        return clean_optional_int(value)
+
+    @field_validator(
+        "expected_value",
+        "proposal_amount",
+        "final_sale_amount",
+        "recurring_amount",
+        mode="before",
+    )
+    @classmethod
+    def validate_optional_amounts(cls, value):
+        return clean_optional_float(value)
+
 
 class SalesLeadResponse(BaseModel):
     id: int
@@ -112,6 +207,7 @@ class SalesLeadResponse(BaseModel):
 
     sales_rep_user_id: Optional[int] = None
     created_by_user_id: int
+    software_product_id: Optional[int] = None
 
     client_name: str
     client_phone: Optional[str] = None
@@ -171,9 +267,25 @@ class SalesLeadStatusUpdate(BaseModel):
 
 
 class LeadConvertRequest(BaseModel):
-    final_sale_amount: float
+    final_sale_amount: Optional[float] = None
     commission_percentage: float = 0
+    software_product_id: Optional[int] = None
     remarks: Optional[str] = None
+
+    @field_validator("final_sale_amount", mode="before")
+    @classmethod
+    def validate_final_sale_amount(cls, value):
+        return clean_optional_float(value)
+
+    @field_validator("commission_percentage", mode="before")
+    @classmethod
+    def validate_commission_percentage(cls, value):
+        return clean_zero_float(value)
+
+    @field_validator("software_product_id", mode="before")
+    @classmethod
+    def validate_software_product_id(cls, value):
+        return clean_optional_int(value)
 
 
 class LeadDeliverRequest(BaseModel):
@@ -205,6 +317,7 @@ class SalesCommissionResponse(BaseModel):
     sale_amount: float
     commission_percentage: float
     commission_amount: float
+    paid_amount: float = 0
 
     status: str
 
@@ -260,6 +373,16 @@ class ReceivedPaymentCreate(BaseModel):
 
     is_active: bool = True
 
+    @field_validator("lead_id", mode="before")
+    @classmethod
+    def validate_lead_id(cls, value):
+        return clean_optional_int(value)
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def validate_amount(cls, value):
+        return clean_zero_float(value)
+
 
 class ReceivedPaymentUpdate(BaseModel):
     lead_id: Optional[int] = None
@@ -280,6 +403,16 @@ class ReceivedPaymentUpdate(BaseModel):
     remarks: Optional[str] = None
 
     is_active: Optional[bool] = None
+
+    @field_validator("lead_id", mode="before")
+    @classmethod
+    def validate_lead_id(cls, value):
+        return clean_optional_int(value)
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def validate_amount(cls, value):
+        return clean_optional_float(value)
 
 
 class ReceivedPaymentResponse(BaseModel):
@@ -344,6 +477,7 @@ class ReceivedPaymentSummaryResponse(BaseModel):
 
 class CRMProjectCreate(BaseModel):
     lead_id: Optional[int] = None
+    software_product_id: Optional[int] = None
 
     assigned_to_user_id: Optional[int] = None
 
@@ -351,7 +485,7 @@ class CRMProjectCreate(BaseModel):
     description: Optional[str] = None
 
     # custom_software, existing_software, social_media_management,
-    # internal_project, other
+    # internal_project, maintenance, other
     project_type: str = "internal_project"
 
     priority: str = "medium"
@@ -381,6 +515,7 @@ class CRMProjectCreate(BaseModel):
 
 class CRMProjectUpdate(BaseModel):
     lead_id: Optional[int] = None
+    software_product_id: Optional[int] = None
 
     assigned_to_user_id: Optional[int] = None
 
@@ -416,6 +551,7 @@ class CRMProjectResponse(BaseModel):
     company_id: int
 
     lead_id: Optional[int] = None
+    software_product_id: Optional[int] = None
 
     assigned_to_user_id: Optional[int] = None
     created_by_user_id: int
@@ -444,6 +580,7 @@ class CRMProjectResponse(BaseModel):
 
     admin_remarks: Optional[str] = None
 
+    converted_to_software_product: bool = False
     is_active: bool
 
     created_at: datetime
@@ -459,6 +596,106 @@ class CRMProjectStatusUpdate(BaseModel):
     submission_note: Optional[str] = None
     submission_link: Optional[str] = None
     admin_remarks: Optional[str] = None
+
+
+# ----------------------------------------
+# SOFTWARE PRODUCT SCHEMAS
+# ----------------------------------------
+
+class SoftwareProductCreate(BaseModel):
+    source_project_id: Optional[int] = None
+
+    software_name: str
+    software_type: str = "existing_software"
+    description: Optional[str] = None
+
+    base_price: float = 0
+    setup_charge: Optional[float] = 0
+
+    recurring_amount: Optional[float] = None
+    recurring_cycle: Optional[str] = None
+
+    version: Optional[str] = None
+    demo_url: Optional[str] = None
+    documentation_url: Optional[str] = None
+
+    status: str = "active"
+    notes: Optional[str] = None
+
+    is_active: bool = True
+
+
+class SoftwareProductUpdate(BaseModel):
+    source_project_id: Optional[int] = None
+
+    software_name: Optional[str] = None
+    software_type: Optional[str] = None
+    description: Optional[str] = None
+
+    base_price: Optional[float] = None
+    setup_charge: Optional[float] = None
+
+    recurring_amount: Optional[float] = None
+    recurring_cycle: Optional[str] = None
+
+    version: Optional[str] = None
+    demo_url: Optional[str] = None
+    documentation_url: Optional[str] = None
+
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+    is_active: Optional[bool] = None
+
+
+class SoftwareProductResponse(BaseModel):
+    id: int
+    company_id: int
+    source_project_id: Optional[int] = None
+
+    software_name: str
+    software_type: str
+    description: Optional[str] = None
+
+    base_price: float
+    setup_charge: Optional[float] = None
+
+    recurring_amount: Optional[float] = None
+    recurring_cycle: Optional[str] = None
+
+    version: Optional[str] = None
+    demo_url: Optional[str] = None
+    documentation_url: Optional[str] = None
+
+    status: str
+    notes: Optional[str] = None
+
+    is_active: bool
+
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {
+        "from_attributes": True
+    }
+
+
+class ProjectToSoftwareProductRequest(BaseModel):
+    software_name: Optional[str] = None
+    software_type: str = "existing_software"
+    description: Optional[str] = None
+
+    base_price: Optional[float] = None
+    setup_charge: Optional[float] = 0
+
+    recurring_amount: Optional[float] = None
+    recurring_cycle: Optional[str] = None
+
+    version: Optional[str] = None
+    demo_url: Optional[str] = None
+    documentation_url: Optional[str] = None
+
+    notes: Optional[str] = None
 
 
 # ----------------------------------------

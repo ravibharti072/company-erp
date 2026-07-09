@@ -10,6 +10,7 @@ from app.routers import (
     attendance,
     tasks,
     sales,
+    commissions,
     freelancers,
     dashboard,
 )
@@ -40,5 +41,6 @@ app.include_router(users.router)
 app.include_router(attendance.router)
 app.include_router(tasks.router)
 app.include_router(sales.router)
+app.include_router(commissions.router)
 app.include_router(freelancers.router)
 app.include_router(dashboard.router)

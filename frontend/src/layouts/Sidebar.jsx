@@ -1,12 +1,13 @@
 import {
   BarChart3,
-  BriefcaseBusiness,
   CalendarCheck,
   ChevronRight,
   ClipboardList,
   FolderKanban,
   LayoutDashboard,
   LogOut,
+  PackageCheck,
+  Percent,
   Settings,
   Target,
   User,
@@ -342,74 +343,92 @@ const FULL_ACCESS_ROLES = ["super-admin", "company-admin", "admin", "owner"];
 
 const DEFAULT_PORTAL_ACCESS_BY_ROLE = {
   "super-admin": [
+    "dashboard",
     "people-onboarding",
     "users",
     "attendance",
     "tasks",
     "sales",
+    "software-products",
+    "sales-commission",
     "projects",
-    "freelancers",
     "reports",
     "settings",
   ],
   "company-admin": [
+    "dashboard",
     "people-onboarding",
     "users",
     "attendance",
     "tasks",
     "sales",
+    "software-products",
+    "sales-commission",
     "projects",
-    "freelancers",
     "reports",
     "settings",
   ],
   admin: [
+    "dashboard",
     "people-onboarding",
     "users",
     "attendance",
     "tasks",
     "sales",
+    "software-products",
+    "sales-commission",
     "projects",
-    "freelancers",
     "reports",
     "settings",
   ],
   owner: [
+    "dashboard",
     "people-onboarding",
     "users",
     "attendance",
     "tasks",
     "sales",
+    "software-products",
+    "sales-commission",
     "projects",
-    "freelancers",
     "reports",
     "settings",
   ],
   hr: [
+    "dashboard",
     "people-onboarding",
     "users",
     "attendance",
     "tasks",
-    "freelancers",
     "reports",
     "settings",
   ],
   manager: [
+    "dashboard",
     "people-onboarding",
     "users",
     "attendance",
     "tasks",
     "sales",
+    "software-products",
+    "sales-commission",
     "projects",
-    "freelancers",
     "reports",
     "settings",
   ],
-  accountant: ["attendance", "tasks", "reports", "settings"],
-  employee: ["attendance", "tasks", "settings"],
-  intern: ["attendance", "tasks", "settings"],
-  "sales-representative": ["attendance", "tasks", "sales", "settings"],
-  freelancer: ["attendance", "tasks", "settings"],
+  accountant: ["dashboard", "attendance", "tasks", "reports", "settings"],
+  employee: ["dashboard", "attendance", "tasks", "settings"],
+  intern: ["dashboard", "attendance", "tasks", "settings"],
+  "sales-representative": [
+    "dashboard",
+    "attendance",
+    "tasks",
+    "sales",
+    "software-products",
+    "sales-commission",
+    "settings",
+  ],
+  freelancer: ["dashboard", "attendance", "tasks", "settings"],
 };
 
 const menuSections = [
@@ -463,10 +482,22 @@ const menuSections = [
         portalKey: "sales",
       },
       {
+        label: "Software Products",
+        path: "/software-products",
+        icon: PackageCheck,
+        portalKey: "software-products",
+      },
+      {
         label: "Receive Payment",
         path: "/receive-payment",
         icon: WalletCards,
         portalKey: "sales",
+      },
+      {
+        label: "Sales Commission",
+        path: "/sales-commission",
+        icon: Percent,
+        portalKey: "sales-commission",
       },
       {
         label: "Projects",
@@ -479,12 +510,6 @@ const menuSections = [
         path: "/maintenance",
         icon: Wrench,
         portalKey: "sales",
-      },
-      {
-        label: "Freelancers",
-        path: "/freelancers",
-        icon: BriefcaseBusiness,
-        portalKey: "freelancers",
       },
     ],
   },
@@ -562,8 +587,9 @@ function parsePortalAccess(value, role) {
       "attendance",
       "tasks",
       "sales",
+      "software-products",
+      "sales-commission",
       "projects",
-      "freelancers",
       "reports",
       "settings",
     ];
@@ -582,6 +608,7 @@ function parsePortalAccess(value, role) {
       }
     } catch {
       return DEFAULT_PORTAL_ACCESS_BY_ROLE[normalizedRole] || [
+        "dashboard",
         "attendance",
         "tasks",
         "settings",
@@ -590,6 +617,7 @@ function parsePortalAccess(value, role) {
   }
 
   return DEFAULT_PORTAL_ACCESS_BY_ROLE[normalizedRole] || [
+    "dashboard",
     "attendance",
     "tasks",
     "settings",
@@ -611,6 +639,13 @@ function canAccessPortal(user, portalKey) {
   }
 
   const portalAccess = parsePortalAccess(user?.portal_access, user?.role);
+
+  if (
+    ["software-products", "sales-commission"].includes(normalizedPortal) &&
+    portalAccess.includes("sales")
+  ) {
+    return true;
+  }
 
   return portalAccess.includes(normalizedPortal);
 }

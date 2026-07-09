@@ -184,6 +184,12 @@ const getErrorMessage = (error, fallback) => {
   return fallback;
 };
 
+const getSoftwareProductPrice = (product) => {
+  if (!product) return 0;
+
+  return Number(product.base_price || 0) + Number(product.setup_charge || 0);
+};
+
 const getEmptyLeadForm = () => ({
   client_name: "",
   client_phone: "",
@@ -191,6 +197,7 @@ const getEmptyLeadForm = () => ({
   client_company_name: "",
   client_address: "",
   service_type: "custom_software",
+  software_product_id: "",
   lead_source: "website",
   expected_value: "",
   follow_up_date: "",
@@ -198,8 +205,10 @@ const getEmptyLeadForm = () => ({
 });
 
 const getEmptyConvertForm = (lead = null) => ({
+  software_product_id: lead?.software_product_id ? String(lead.software_product_id) : "",
   final_sale_amount:
     lead?.final_sale_amount ||
+    lead?.proposal_amount ||
     lead?.expected_value ||
     "",
   commission_percentage: "0",
@@ -212,6 +221,7 @@ export default function SalesPage() {
 
   const [leads, setLeads] = useState([]);
   const [users, setUsers] = useState([]);
+  const [softwareProducts, setSoftwareProducts] = useState([]);
   const [summary, setSummary] = useState(null);
 
   const [loading, setLoading] = useState(false);
@@ -254,6 +264,22 @@ export default function SalesPage() {
 
   const currentUserName =
     user?.full_name || user?.name || user?.username || user?.email || "Me";
+
+  const activeSoftwareProducts = useMemo(() => {
+    return softwareProducts.filter((product) => {
+      return product.is_active !== false && product.status !== "inactive";
+    });
+  }, [softwareProducts]);
+
+  const softwareProductMap = useMemo(() => {
+    const map = new Map();
+
+    softwareProducts.forEach((product) => {
+      map.set(Number(product.id), product);
+    });
+
+    return map;
+  }, [softwareProducts]);
 
   const showNotification = (type, message) => {
     setNotification({
@@ -393,6 +419,14 @@ export default function SalesPage() {
     return WORKFLOW_STATUS_OPTIONS;
   }, [activeTab]);
 
+  const getSoftwareProductName = (softwareProductId) => {
+    if (!softwareProductId) return "";
+
+    const product = softwareProductMap.get(Number(softwareProductId));
+
+    return product?.software_name || "";
+  };
+
   const filteredLeads = useMemo(() => {
     if (!activeTab) return [];
 
@@ -403,6 +437,7 @@ export default function SalesPage() {
       const serviceType = normalizeServiceType(
         lead.service_type || lead.service_interest
       );
+      const softwareName = getSoftwareProductName(lead.software_product_id);
 
       const tabMatch = getLeadTabStatus(leadStatus) === activeTab;
 
@@ -414,6 +449,7 @@ export default function SalesPage() {
         lead.client_address,
         lead.service_interest,
         lead.service_type,
+        softwareName,
         lead.lead_source,
         lead.status,
         lead.notes,
@@ -436,6 +472,7 @@ export default function SalesPage() {
     serviceFilter,
     sourceFilter,
     statusFilter,
+    softwareProductMap,
   ]);
 
   const totalPages = Math.max(1, Math.ceil(filteredLeads.length / ITEMS_PER_PAGE));
@@ -471,6 +508,15 @@ export default function SalesPage() {
     }
   };
 
+  const fetchSoftwareProducts = async () => {
+    try {
+      const response = await api.get("/sales/software-products");
+      setSoftwareProducts(Array.isArray(response.data) ? response.data : []);
+    } catch (error) {
+      console.error("Software products loading error:", error);
+    }
+  };
+
   const fetchSummary = async () => {
     try {
       const response = await api.get("/sales/summary");
@@ -485,7 +531,12 @@ export default function SalesPage() {
 
     try {
       setLoading(true);
-      await Promise.all([fetchUsers(), fetchLeads(), fetchSummary()]);
+      await Promise.all([
+        fetchUsers(),
+        fetchLeads(),
+        fetchSoftwareProducts(),
+        fetchSummary(),
+      ]);
     } finally {
       setLoading(false);
     }
@@ -512,6 +563,12 @@ export default function SalesPage() {
     if (!foundUser) return `User ID: ${userId}`;
 
     return foundUser.full_name || foundUser.person?.full_name || foundUser.email;
+  };
+
+  const getSelectedProductFromForm = (form) => {
+    if (!form?.software_product_id) return null;
+
+    return softwareProductMap.get(Number(form.software_product_id)) || null;
   };
 
   const clearFilters = () => {
@@ -543,28 +600,96 @@ export default function SalesPage() {
   const updateLeadField = (event) => {
     const { name, value } = event.target;
 
-    setLeadForm((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setLeadForm((prev) => {
+      const next = {
+        ...prev,
+        [name]: value,
+      };
+
+      if (name === "service_type") {
+        const serviceType = normalizeServiceType(value);
+
+        if (serviceType !== "existing_software") {
+          return {
+            ...next,
+            software_product_id: "",
+          };
+        }
+
+        return next;
+      }
+
+      if (name === "software_product_id") {
+        const product = softwareProductMap.get(Number(value));
+        const productPrice = getSoftwareProductPrice(product);
+
+        return {
+          ...next,
+          expected_value: productPrice > 0 ? String(productPrice) : next.expected_value,
+        };
+      }
+
+      return next;
+    });
   };
 
   const updateEditField = (event) => {
     const { name, value } = event.target;
 
-    setEditForm((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setEditForm((prev) => {
+      const next = {
+        ...prev,
+        [name]: value,
+      };
+
+      if (name === "service_type") {
+        const serviceType = normalizeServiceType(value);
+
+        if (serviceType !== "existing_software") {
+          return {
+            ...next,
+            software_product_id: "",
+          };
+        }
+
+        return next;
+      }
+
+      if (name === "software_product_id") {
+        const product = softwareProductMap.get(Number(value));
+        const productPrice = getSoftwareProductPrice(product);
+
+        return {
+          ...next,
+          expected_value: productPrice > 0 ? String(productPrice) : next.expected_value,
+        };
+      }
+
+      return next;
+    });
   };
 
   const updateConvertField = (event) => {
     const { name, value } = event.target;
 
-    setConvertForm((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setConvertForm((prev) => {
+      const next = {
+        ...prev,
+        [name]: value,
+      };
+
+      if (name === "software_product_id") {
+        const product = softwareProductMap.get(Number(value));
+        const productPrice = getSoftwareProductPrice(product);
+
+        return {
+          ...next,
+          final_sale_amount: productPrice > 0 ? String(productPrice) : next.final_sale_amount,
+        };
+      }
+
+      return next;
+    });
   };
 
   const closeLeadModal = () => {
@@ -604,6 +729,9 @@ export default function SalesPage() {
       client_company_name: lead.client_company_name || "",
       client_address: lead.client_address || "",
       service_type: normalizeServiceType(lead.service_type || lead.service_interest),
+      software_product_id: lead.software_product_id
+        ? String(lead.software_product_id)
+        : "",
       lead_source: lead.lead_source || "website",
       expected_value:
         lead.expected_value !== null && lead.expected_value !== undefined
@@ -617,8 +745,25 @@ export default function SalesPage() {
   };
 
   const openConvertModal = (lead) => {
+    const product = lead.software_product_id
+      ? softwareProductMap.get(Number(lead.software_product_id))
+      : null;
+
+    const productPrice = getSoftwareProductPrice(product);
+
     setSelectedLead(lead);
-    setConvertForm(getEmptyConvertForm(lead));
+    setConvertForm({
+      ...getEmptyConvertForm(lead),
+      software_product_id: lead.software_product_id
+        ? String(lead.software_product_id)
+        : "",
+      final_sale_amount:
+        lead.final_sale_amount ||
+        lead.proposal_amount ||
+        lead.expected_value ||
+        productPrice ||
+        "",
+    });
     setShowConvertModal(true);
   };
 
@@ -653,6 +798,9 @@ export default function SalesPage() {
 
   const buildLeadPayload = (form, status = "new") => {
     const serviceType = normalizeServiceType(form.service_type);
+    const selectedProduct = getSelectedProductFromForm(form);
+    const selectedProductPrice = getSoftwareProductPrice(selectedProduct);
+
     const expectedValue = form.expected_value ? Number(form.expected_value) : null;
 
     return {
@@ -661,6 +809,10 @@ export default function SalesPage() {
       client_email: form.client_email.trim() || null,
       client_company_name: form.client_company_name.trim() || null,
       client_address: form.client_address.trim() || null,
+      software_product_id:
+        serviceType === "existing_software" && form.software_product_id
+          ? Number(form.software_product_id)
+          : null,
       service_interest: serviceType,
       service_type: serviceType,
       lead_source: form.lead_source || "website",
@@ -669,10 +821,21 @@ export default function SalesPage() {
       expected_value:
         expectedValue && !Number.isNaN(expectedValue) && expectedValue > 0
           ? expectedValue
+          : serviceType === "existing_software" && selectedProductPrice > 0
+            ? selectedProductPrice
+            : null,
+      proposal_amount:
+        serviceType === "existing_software" && selectedProductPrice > 0
+          ? selectedProductPrice
           : null,
-      proposal_amount: null,
-      recurring_amount: null,
-      recurring_cycle: null,
+      recurring_amount:
+        serviceType === "existing_software" && selectedProduct?.recurring_amount
+          ? Number(selectedProduct.recurring_amount)
+          : null,
+      recurring_cycle:
+        serviceType === "existing_software" && selectedProduct?.recurring_cycle
+          ? selectedProduct.recurring_cycle
+          : null,
       follow_up_date: form.follow_up_date || null,
       notes: form.notes.trim() || null,
     };
@@ -746,7 +909,34 @@ export default function SalesPage() {
 
     if (!selectedLead) return;
 
-    const amount = Number(convertForm.final_sale_amount);
+    const serviceType = normalizeServiceType(
+      selectedLead.service_type || selectedLead.service_interest
+    );
+
+    const isExistingSoftware = serviceType === "existing_software";
+
+    const softwareProductId =
+      convertForm.software_product_id || selectedLead.software_product_id || "";
+
+    if (isExistingSoftware && !softwareProductId) {
+      showNotification("error", "Select software before converting this lead");
+      return;
+    }
+
+    const selectedProduct = softwareProductId
+      ? softwareProductMap.get(Number(softwareProductId))
+      : null;
+
+    const productPrice = getSoftwareProductPrice(selectedProduct);
+
+    let amount = convertForm.final_sale_amount
+      ? Number(convertForm.final_sale_amount)
+      : 0;
+
+    if ((!amount || Number.isNaN(amount) || amount <= 0) && isExistingSoftware) {
+      amount = productPrice;
+    }
+
     const commission = convertForm.commission_percentage
       ? Number(convertForm.commission_percentage)
       : 0;
@@ -765,6 +955,7 @@ export default function SalesPage() {
       setSaving(true);
 
       await api.post(`/sales/leads/${selectedLead.id}/convert`, {
+        software_product_id: softwareProductId ? Number(softwareProductId) : null,
         final_sale_amount: amount,
         commission_percentage: commission,
         remarks: convertForm.remarks?.trim() || "Converted from Sales CRM",
@@ -949,6 +1140,7 @@ export default function SalesPage() {
   const renderLeadRow = (lead) => {
     const status = normalizeStatus(lead.status);
     const serviceType = normalizeServiceType(lead.service_type || lead.service_interest);
+    const softwareName = getSoftwareProductName(lead.software_product_id);
 
     return (
       <article className="lead-list-row" key={lead.id}>
@@ -984,8 +1176,9 @@ export default function SalesPage() {
 
         <div className="lead-detail-cell">
           <span className="cell-label">Software Type</span>
-          <strong>{formatLabel(serviceType)}</strong>
+          <strong>{softwareName || formatLabel(serviceType)}</strong>
           <small>
+            {softwareName ? `${formatLabel(serviceType)} • ` : ""}
             {formatLabel(lead.lead_source || "No Source")}
             {lead.expected_value
               ? ` • Expected: ${formatCurrency(lead.expected_value)}`
@@ -1052,7 +1245,53 @@ export default function SalesPage() {
     );
   };
 
+  const renderSoftwareProductField = (form, onChange) => {
+    const serviceType = normalizeServiceType(form.service_type);
+
+    if (serviceType !== "existing_software") return null;
+
+    const selectedProduct = getSelectedProductFromForm(form);
+    const selectedPrice = getSoftwareProductPrice(selectedProduct);
+
+    return (
+      <div className="form-group">
+        <label>Select Software</label>
+        <select
+          name="software_product_id"
+          value={form.software_product_id || ""}
+          onChange={onChange}
+        >
+          <option value="">Select existing software</option>
+          {activeSoftwareProducts.map((product) => (
+            <option key={product.id} value={product.id}>
+              {product.software_name} - {formatCurrency(getSoftwareProductPrice(product))}
+            </option>
+          ))}
+        </select>
+
+        {activeSoftwareProducts.length === 0 ? (
+          <small className="field-help error-help">
+            No software product found. First complete a project and add it as software product.
+          </small>
+        ) : selectedProduct ? (
+          <small className="field-help">
+            Price: {formatCurrency(selectedPrice)}
+            {selectedProduct.recurring_amount
+              ? ` • Recurring: ${formatCurrency(selectedProduct.recurring_amount)} / ${formatLabel(selectedProduct.recurring_cycle)}`
+              : ""}
+          </small>
+        ) : (
+          <small className="field-help">
+            Select product to auto-fill amount.
+          </small>
+        )}
+      </div>
+    );
+  };
+
   const renderLeadFormFields = (form, onChange) => {
+    const serviceType = normalizeServiceType(form.service_type);
+
     return (
       <div className="form-content-grid compact-form-grid">
         <div className="form-group">
@@ -1112,6 +1351,8 @@ export default function SalesPage() {
           </select>
         </div>
 
+        {renderSoftwareProductField(form, onChange)}
+
         <div className="form-group">
           <label>Source</label>
           <select
@@ -1128,14 +1369,22 @@ export default function SalesPage() {
         </div>
 
         <div className="form-group">
-          <label>Expected Amount Optional</label>
+          <label>
+            {serviceType === "existing_software"
+              ? "Expected Amount Auto-filled"
+              : "Expected Amount Optional"}
+          </label>
           <input
             name="expected_value"
             type="number"
             min="0"
             value={form.expected_value}
             onChange={onChange}
-            placeholder="Example: 50000"
+            placeholder={
+              serviceType === "existing_software"
+                ? "Auto-filled from software"
+                : "Example: 50000"
+            }
           />
         </div>
 
@@ -1476,8 +1725,7 @@ export default function SalesPage() {
                   <div>
                     <h2>Create CRM Lead</h2>
                     <p>
-                      Expected amount is optional now. Final amount is required
-                      only when converting the lead.
+                      For existing software, select software product and amount will auto-fill.
                     </p>
                   </div>
                 </div>
@@ -1526,7 +1774,7 @@ export default function SalesPage() {
 
                   <div>
                     <h2>Edit Lead</h2>
-                    <p>Update client, contact, expected amount, follow-up, and notes.</p>
+                    <p>Update client, software product, expected amount, follow-up, and notes.</p>
                   </div>
                 </div>
 
@@ -1574,7 +1822,11 @@ export default function SalesPage() {
 
                   <div>
                     <h2>Convert Lead</h2>
-                    <p>Enter final sale amount before moving this lead to Converted Sales.</p>
+                    <p>
+                      {normalizeServiceType(selectedLead.service_type || selectedLead.service_interest) === "existing_software"
+                        ? "Select software product. Sale amount will auto-fill from software price."
+                        : "Enter final sale amount before moving this lead to Converted Sales."}
+                    </p>
                   </div>
                 </div>
 
@@ -1605,6 +1857,35 @@ export default function SalesPage() {
               </div>
 
               <div className="form-content-grid compact-form-grid">
+                {normalizeServiceType(selectedLead.service_type || selectedLead.service_interest) === "existing_software" && (
+                  <div className="form-group full-span">
+                    <label>Select Software *</label>
+                    <select
+                      name="software_product_id"
+                      value={convertForm.software_product_id || ""}
+                      onChange={updateConvertField}
+                      required
+                    >
+                      <option value="">Select existing software</option>
+                      {activeSoftwareProducts.map((product) => (
+                        <option key={product.id} value={product.id}>
+                          {product.software_name} - {formatCurrency(getSoftwareProductPrice(product))}
+                        </option>
+                      ))}
+                    </select>
+
+                    {activeSoftwareProducts.length === 0 ? (
+                      <small className="field-help error-help">
+                        No software product found. First complete a project and add it as software product.
+                      </small>
+                    ) : (
+                      <small className="field-help">
+                        Software amount will be used as default final sale amount.
+                      </small>
+                    )}
+                  </div>
+                )}
+
                 <div className="form-group">
                   <label>Final Sale Amount *</label>
                   <input
@@ -1700,6 +1981,11 @@ export default function SalesPage() {
                       selectedLead.service_type || selectedLead.service_interest
                     )}
                   </strong>
+                </div>
+
+                <div>
+                  <span>Selected Software</span>
+                  <strong>{getSoftwareProductName(selectedLead.software_product_id) || "-"}</strong>
                 </div>
 
                 <div>
@@ -2234,6 +2520,17 @@ const salesPageStyles = `
   font-size: 13px;
   font-weight: 800;
   cursor: pointer;
+}
+
+.field-help {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.error-help {
+  color: #dc2626;
 }
 
 .crm-list-card {

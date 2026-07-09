@@ -3,9 +3,11 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
+  Pencil,
   Trash2,
   UserPlus,
   UsersRound,
+  X,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -44,12 +46,19 @@ function formatOptionLabel(value) {
     .join(" ");
 }
 
+function getDateInputValue(value) {
+  if (!value) return "";
+  return String(value).slice(0, 10);
+}
+
 export default function PeopleOnboardingPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
   const [people, setPeople] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [editingPersonId, setEditingPersonId] = useState(null);
+  const [message, setMessage] = useState(null);
 
   const [personTypeFilter, setPersonTypeFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -68,6 +77,16 @@ export default function PeopleOnboardingPage() {
     status: "active",
     notes: "",
   });
+
+  const isEditing = Boolean(editingPersonId);
+
+  const showMessage = (type, text) => {
+    setMessage({ type, text });
+
+    window.setTimeout(() => {
+      setMessage(null);
+    }, 3000);
+  };
 
   const visiblePeople = useMemo(() => {
     return people.filter((person) => {
@@ -100,10 +119,9 @@ export default function PeopleOnboardingPage() {
   const fetchPeople = async () => {
     try {
       const response = await api.get("/people");
-
       setPeople(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
-      alert(error?.response?.data?.detail || "Failed to load people");
+      showMessage("error", error?.response?.data?.detail || "Failed to load people");
     }
   };
 
@@ -140,6 +158,33 @@ export default function PeopleOnboardingPage() {
       status: "active",
       notes: "",
     });
+
+    setEditingPersonId(null);
+  };
+
+  const handleEditPerson = (person) => {
+    setEditingPersonId(person.id);
+    setMessage(null);
+
+    setFormData({
+      full_name: person.full_name || "",
+      email: person.email || "",
+      phone: person.phone || "",
+      person_type: person.person_type || "employee",
+      department: person.department || "",
+      designation: person.designation || "",
+      salary_type: person.salary_type || "unpaid",
+      salary_amount:
+        person.salary_type === "unpaid" ? "" : person.salary_amount || "",
+      joining_date: getDateInputValue(person.joining_date),
+      status: person.status || "active",
+      notes: person.notes || "",
+    });
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
   };
 
   const handleSubmit = async (event) => {
@@ -147,6 +192,7 @@ export default function PeopleOnboardingPage() {
 
     try {
       setSaving(true);
+      setMessage(null);
 
       const payload = {
         ...(user?.company_id ? { company_id: user.company_id } : {}),
@@ -168,14 +214,23 @@ export default function PeopleOnboardingPage() {
         notes: formData.notes.trim() || null,
       };
 
-      await api.post("/people", payload);
-
-      resetForm();
-      await fetchPeople();
-
-      alert("Person onboarded successfully");
+      if (isEditing) {
+        await api.put(`/people/${editingPersonId}`, payload);
+        await fetchPeople();
+        resetForm();
+        showMessage("success", "Person updated successfully");
+      } else {
+        await api.post("/people", payload);
+        await fetchPeople();
+        resetForm();
+        showMessage("success", "Person onboarded successfully");
+      }
     } catch (error) {
-      alert(error?.response?.data?.detail || "Failed to onboard person");
+      showMessage(
+        "error",
+        error?.response?.data?.detail ||
+          (isEditing ? "Failed to update person" : "Failed to onboard person")
+      );
     } finally {
       setSaving(false);
     }
@@ -189,11 +244,21 @@ export default function PeopleOnboardingPage() {
     if (!confirmDeactivate) return;
 
     try {
+      setMessage(null);
+
       await api.delete(`/people/${personId}`);
       await fetchPeople();
-      alert("Person deactivated successfully");
+
+      if (editingPersonId === personId) {
+        resetForm();
+      }
+
+      showMessage("success", "Person deactivated successfully");
     } catch (error) {
-      alert(error?.response?.data?.detail || "Failed to deactivate person");
+      showMessage(
+        "error",
+        error?.response?.data?.detail || "Failed to deactivate person"
+      );
     }
   };
 
@@ -210,6 +275,18 @@ export default function PeopleOnboardingPage() {
       <style>{peoplePageStyles}</style>
 
       <div className="people-page">
+        {message && (
+          <div
+            className={
+              message.type === "success"
+                ? "page-message success-message"
+                : "page-message error-message"
+            }
+          >
+            {message.text}
+          </div>
+        )}
+
         <div className="page-header">
           <div className="page-title-wrap">
             <button
@@ -227,15 +304,13 @@ export default function PeopleOnboardingPage() {
             <div>
               <h1>People Onboarding</h1>
               <p>
-                Onboard employees, interns, freelancers, and company people before
-                giving software access.
+                Onboard employees, interns, freelancers, and company people
+                before giving software access.
               </p>
             </div>
           </div>
 
-          <div className="header-count-pill">
-            {people.length} People
-          </div>
+          <div className="header-count-pill">{people.length} People</div>
         </div>
 
         <form className="module-form-card" onSubmit={handleSubmit}>
@@ -245,9 +320,11 @@ export default function PeopleOnboardingPage() {
             </div>
 
             <div>
-              <h2>Onboard Person</h2>
+              <h2>{isEditing ? "Edit Person" : "Onboard Person"}</h2>
               <p>
-                Company will be selected automatically from the logged-in account.
+                {isEditing
+                  ? "Update onboarding details for this person."
+                  : "Company will be selected automatically from the logged-in account."}
               </p>
             </div>
           </div>
@@ -316,7 +393,7 @@ export default function PeopleOnboardingPage() {
                 name="designation"
                 value={formData.designation}
                 onChange={updateField}
-                placeholder="Developer, Sales Executive..."
+                placeholder="Developer, Marketing & Growth Intern..."
               />
             </div>
 
@@ -359,7 +436,11 @@ export default function PeopleOnboardingPage() {
 
             <div className="form-group">
               <label>Status</label>
-              <select name="status" value={formData.status} onChange={updateField}>
+              <select
+                name="status"
+                value={formData.status}
+                onChange={updateField}
+              >
                 {STATUS_OPTIONS.map((status) => (
                   <option key={status} value={status}>
                     {formatOptionLabel(status)}
@@ -380,8 +461,26 @@ export default function PeopleOnboardingPage() {
           </div>
 
           <div className="form-actions-row">
+            {isEditing && (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={resetForm}
+                disabled={saving}
+              >
+                <X size={16} />
+                Cancel Edit
+              </button>
+            )}
+
             <button type="submit" className="primary-button" disabled={saving}>
-              {saving ? "Saving..." : "Onboard Person"}
+              {saving
+                ? isEditing
+                  ? "Updating..."
+                  : "Saving..."
+                : isEditing
+                ? "Update Person"
+                : "Onboard Person"}
             </button>
           </div>
         </form>
@@ -446,7 +545,12 @@ export default function PeopleOnboardingPage() {
                   </tr>
                 ) : (
                   paginatedPeople.map((person) => (
-                    <tr key={person.id}>
+                    <tr
+                      key={person.id}
+                      className={
+                        editingPersonId === person.id ? "editing-row" : ""
+                      }
+                    >
                       <td>{person.id}</td>
 
                       <td>
@@ -465,8 +569,13 @@ export default function PeopleOnboardingPage() {
                       <td>{person.designation || "-"}</td>
 
                       <td>
-                        ₹{person.salary_amount || 0}
-                        <span>{formatOptionLabel(person.salary_type || "-")}</span>
+                        ₹
+                        {Number(person.salary_amount || 0).toLocaleString(
+                          "en-IN"
+                        )}
+                        <span>
+                          {formatOptionLabel(person.salary_type || "-")}
+                        </span>
                       </td>
 
                       <td>
@@ -482,17 +591,29 @@ export default function PeopleOnboardingPage() {
                       </td>
 
                       <td>
-                        {person.is_active ? (
+                        <div className="action-buttons">
                           <button
                             type="button"
-                            className="icon-danger-button"
-                            onClick={() => handleDeactivate(person.id)}
+                            className="icon-edit-button"
+                            onClick={() => handleEditPerson(person)}
+                            title="Edit person"
                           >
-                            <Trash2 size={16} />
+                            <Pencil size={15} />
                           </button>
-                        ) : (
-                          "-"
-                        )}
+
+                          {person.is_active ? (
+                            <button
+                              type="button"
+                              className="icon-danger-button"
+                              onClick={() => handleDeactivate(person.id)}
+                              title="Deactivate person"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          ) : (
+                            "-"
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -539,6 +660,28 @@ const peoplePageStyles = `
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+.page-message {
+  min-height: 44px;
+  padding: 12px 16px;
+  border-radius: 15px;
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+}
+
+.success-message {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #bbf7d0;
+}
+
+.error-message {
+  background: #fef2f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
 }
 
 .page-header {
@@ -717,24 +860,37 @@ const peoplePageStyles = `
 .form-actions-row {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
   margin-top: 16px;
 }
 
-.primary-button {
-  min-width: 165px;
+.primary-button,
+.secondary-button {
+  min-width: 150px;
   height: 42px;
-  border: none;
   border-radius: 14px;
-  background: #2563eb;
-  color: #ffffff;
   font-size: 13px;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
 }
 
-.primary-button:disabled {
+.primary-button {
+  border: none;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.secondary-button {
+  border: 1px solid #dbe5f2;
+  background: #ffffff;
+  color: #334155;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }
@@ -809,6 +965,14 @@ const peoplePageStyles = `
   background: #f8fbff;
 }
 
+.editing-row {
+  background: #eff6ff;
+}
+
+.editing-row:hover {
+  background: #eff6ff !important;
+}
+
 .data-table td strong {
   display: block;
   color: #06142b;
@@ -857,15 +1021,31 @@ const peoplePageStyles = `
   border: 1px solid #fecaca;
 }
 
+.action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-edit-button,
 .icon-danger-button {
   width: 34px;
   height: 34px;
   border-radius: 12px;
+  display: inline-grid;
+  place-items: center;
+}
+
+.icon-edit-button {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.icon-danger-button {
   border: 1px solid #fecaca;
   background: #fef2f2;
   color: #dc2626;
-  display: inline-grid;
-  place-items: center;
 }
 
 .empty-table {
@@ -973,9 +1153,11 @@ const peoplePageStyles = `
 
   .form-actions-row {
     justify-content: stretch;
+    flex-direction: column;
   }
 
-  .primary-button {
+  .primary-button,
+  .secondary-button {
     width: 100%;
   }
 

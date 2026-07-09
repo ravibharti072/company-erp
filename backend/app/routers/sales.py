@@ -1,6 +1,8 @@
 from datetime import date, datetime
 from typing import Optional
 
+from pydantic import BaseModel, ConfigDict
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
@@ -23,6 +25,7 @@ from app.schemas_modules.sales import (
     LeadConvertResponse,
     LeadDeliverRequest,
     LeadPaymentSummaryResponse,
+    ProjectToSoftwareProductRequest,
     ReceivedPaymentCreate,
     ReceivedPaymentResponse,
     ReceivedPaymentSummaryResponse,
@@ -33,6 +36,9 @@ from app.schemas_modules.sales import (
     SalesLeadResponse,
     SalesLeadStatusUpdate,
     SalesLeadUpdate,
+    SoftwareProductCreate,
+    SoftwareProductResponse,
+    SoftwareProductUpdate,
 )
 
 
@@ -85,6 +91,7 @@ SERVICE_TYPES = {
 
 PROJECT_REQUIRED_SERVICE_TYPES = {
     "custom_software",
+    "existing_software",
     "social_media_management",
     "internal_project",
 }
@@ -102,7 +109,26 @@ CRM_PROJECT_TYPES = {
     "existing_software",
     "social_media_management",
     "internal_project",
+    "maintenance",
     "other",
+}
+
+SOFTWARE_PRODUCT_STATUSES = {
+    "active",
+    "inactive",
+    "archived",
+}
+
+PROJECT_ISSUE_TYPES = {
+    "project_issue",
+    "company_issue",
+}
+
+PROJECT_ISSUE_STATUSES = {
+    "open",
+    "in-progress",
+    "fixed",
+    "closed",
 }
 
 PRIORITIES = {
@@ -114,6 +140,7 @@ PRIORITIES = {
 
 COMMISSION_ALLOWED_STATUSES = {
     "pending",
+    "partial",
     "paid",
     "cancelled",
 }
@@ -131,6 +158,63 @@ PAYMENT_METHODS = {
     "card",
     "other",
 }
+
+
+class ProjectIssueCreate(BaseModel):
+    project_id: Optional[int] = None
+    issue_type: str = "project_issue"
+
+    title: str
+    description: Optional[str] = None
+
+    priority: str = "medium"
+    status: str = "open"
+
+    remarks: Optional[str] = None
+
+
+class ProjectIssueUpdate(BaseModel):
+    project_id: Optional[int] = None
+    issue_type: Optional[str] = None
+
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+    priority: Optional[str] = None
+    status: Optional[str] = None
+
+    remarks: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class ProjectIssueStatusUpdate(BaseModel):
+    status: str
+    remarks: Optional[str] = None
+
+
+class ProjectIssueResponse(BaseModel):
+    id: int
+
+    company_id: int
+    project_id: Optional[int] = None
+    created_by_user_id: int
+
+    issue_type: str
+
+    title: str
+    description: Optional[str] = None
+
+    priority: str
+    status: str
+
+    remarks: Optional[str] = None
+
+    is_active: bool
+
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 # -----------------------------
@@ -165,6 +249,9 @@ def normalize_service_type(value: Optional[str]) -> str:
         "existing": "existing_software",
         "existing_product": "existing_software",
         "existing_software_sale": "existing_software",
+        "existing_software_sales": "existing_software",
+        "software_product": "existing_software",
+        "software_products": "existing_software",
         "social_media": "social_media_management",
         "smm": "social_media_management",
         "internal": "internal_project",
@@ -181,6 +268,14 @@ def normalize_service_type(value: Optional[str]) -> str:
 
 def normalize_project_type(value: Optional[str]) -> str:
     cleaned = normalize_service_type(value)
+
+    project_aliases = {
+        "implementation": "existing_software",
+        "implementation_project": "existing_software",
+        "existing_software_implementation": "existing_software",
+    }
+
+    cleaned = project_aliases.get(cleaned, cleaned)
 
     if cleaned not in CRM_PROJECT_TYPES:
         return "other"
@@ -299,6 +394,62 @@ def validate_project_status(status: str):
         raise HTTPException(
             status_code=400,
             detail="Invalid project status",
+        )
+
+
+def normalize_issue_type(value: Optional[str]) -> str:
+    if not value:
+        return "project_issue"
+
+    cleaned = value.strip().lower().replace("-", "_").replace(" ", "_")
+
+    issue_aliases = {
+        "project": "project_issue",
+        "project_maintenance": "project_issue",
+        "client_issue": "project_issue",
+        "company": "company_issue",
+        "internal": "company_issue",
+        "internal_issue": "company_issue",
+    }
+
+    cleaned = issue_aliases.get(cleaned, cleaned)
+
+    if cleaned not in PROJECT_ISSUE_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid issue type",
+        )
+
+    return cleaned
+
+
+def validate_project_issue_status(status: str):
+    if status not in PROJECT_ISSUE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid project issue status",
+        )
+
+
+def ensure_maintenance_permission(current_user: models.User):
+    if (
+        is_admin_user(current_user)
+        or has_portal_access(current_user, "sales")
+        or has_portal_access(current_user, "projects")
+    ):
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail="You do not have access to Maintenance module",
+    )
+
+
+def validate_software_product_status(status: str):
+    if status not in SOFTWARE_PRODUCT_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid software product status",
         )
 
 
@@ -435,6 +586,23 @@ def get_project_or_404(db: Session, project_id: int) -> models.CRMProject:
     return project
 
 
+def get_software_product_or_404(
+    db: Session,
+    software_product_id: int,
+) -> models.SoftwareProduct:
+    software_product = db.query(models.SoftwareProduct).filter(
+        models.SoftwareProduct.id == software_product_id
+    ).first()
+
+    if not software_product:
+        raise HTTPException(
+            status_code=404,
+            detail="Software product not found",
+        )
+
+    return software_product
+
+
 def ensure_project_access(
     project: models.CRMProject,
     current_user: models.User,
@@ -470,6 +638,81 @@ def ensure_project_access(
         status_code=403,
         detail=f"You do not have permission to {action_text} this project",
     )
+
+
+def get_project_issue_or_404(
+    db: Session,
+    issue_id: int,
+) -> models.ProjectIssue:
+    issue = db.query(models.ProjectIssue).filter(
+        models.ProjectIssue.id == issue_id
+    ).first()
+
+    if not issue:
+        raise HTTPException(
+            status_code=404,
+            detail="Maintenance issue not found",
+        )
+
+    return issue
+
+
+def ensure_project_issue_access(
+    issue: models.ProjectIssue,
+    current_user: models.User,
+    action_text: str = "access",
+):
+    if is_admin_user(current_user):
+        if normalize_role(current_user.role) == "super-admin":
+            return
+
+        if issue.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"You cannot {action_text} another company issue",
+            )
+
+        return
+
+    if has_portal_access(current_user, "sales") or has_portal_access(current_user, "projects"):
+        if issue.company_id == current_user.company_id:
+            return
+
+    raise HTTPException(
+        status_code=403,
+        detail=f"You do not have permission to {action_text} this maintenance issue",
+    )
+
+
+def ensure_software_product_access(
+    software_product: models.SoftwareProduct,
+    current_user: models.User,
+    action_text: str = "access",
+):
+    if is_admin_user(current_user):
+        if normalize_role(current_user.role) == "super-admin":
+            return
+
+        if software_product.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"You cannot {action_text} another company software product",
+            )
+
+        return
+
+    if has_portal_access(current_user, "sales"):
+        if software_product.company_id == current_user.company_id:
+            return
+
+    raise HTTPException(
+        status_code=403,
+        detail=f"You do not have permission to {action_text} this software product",
+    )
+
+
+def get_software_product_total_price(software_product: models.SoftwareProduct) -> float:
+    return float(software_product.base_price or 0) + float(software_product.setup_charge or 0)
 
 
 def apply_project_status_dates(project: models.CRMProject, status: str):
@@ -553,6 +796,349 @@ def get_lead_payment_status(final_sale_amount: float, total_received: float) -> 
     return "partial"
 
 
+def get_lead_sale_amount_for_commission(lead: models.SalesLead) -> float:
+    return float(
+        lead.final_sale_amount
+        or lead.proposal_amount
+        or lead.expected_value
+        or 0
+    )
+
+
+def ensure_commission_for_sales_lead(
+    db: Session,
+    lead: models.SalesLead,
+    remarks: Optional[str] = None,
+) -> Optional[models.SalesCommission]:
+    lead_status = normalize_status(lead.status)
+
+    if lead_status not in {"converted", "delivered", "completed"}:
+        return None
+
+    sale_amount = get_lead_sale_amount_for_commission(lead)
+
+    if sale_amount <= 0:
+        return None
+
+    commission_user_id = (
+        lead.sales_rep_user_id
+        or lead.created_by_user_id
+    )
+
+    if not commission_user_id:
+        return None
+
+    existing_commission = db.query(models.SalesCommission).filter(
+        models.SalesCommission.lead_id == lead.id
+    ).first()
+
+    if existing_commission:
+        existing_commission.sale_amount = sale_amount
+        existing_commission.sales_rep_user_id = commission_user_id
+
+        if existing_commission.commission_percentage is None:
+            existing_commission.commission_percentage = 0
+
+        if existing_commission.commission_amount is None:
+            existing_commission.commission_amount = 0
+
+        if not hasattr(existing_commission, "paid_amount") or existing_commission.paid_amount is None:
+            existing_commission.paid_amount = 0
+
+        commission_percentage = float(existing_commission.commission_percentage or 0)
+
+        if commission_percentage > 0:
+            existing_commission.commission_amount = round(
+                sale_amount * commission_percentage / 100,
+                2,
+            )
+
+        if not existing_commission.status:
+            existing_commission.status = "pending"
+
+        existing_commission.updated_at = datetime.utcnow()
+
+        return existing_commission
+
+    new_commission = models.SalesCommission(
+        company_id=lead.company_id,
+        sales_rep_user_id=commission_user_id,
+        lead_id=lead.id,
+
+        sale_amount=sale_amount,
+
+        commission_percentage=0,
+        commission_amount=0,
+        paid_amount=0,
+
+        status="pending",
+
+        payment_date=None,
+        payment_method=None,
+
+        remarks=remarks
+        or "Auto-created after lead became converted/delivered/completed.",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+
+    db.add(new_commission)
+    db.flush()
+
+    return new_commission
+
+# -----------------------------
+# SOFTWARE PRODUCT APIs
+# -----------------------------
+
+@router.post("/software-products", response_model=SoftwareProductResponse)
+def create_software_product(
+    product: SoftwareProductCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    ensure_sales_admin(current_user)
+    ensure_company_user(current_user)
+
+    company_id = current_user.company_id
+
+    if normalize_role(current_user.role) == "super-admin" and not company_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Super admin must use a company-linked account to create software product",
+        )
+
+    status_value = normalize_status(product.status, default="active")
+    validate_software_product_status(status_value)
+
+    linked_project = None
+
+    if product.source_project_id:
+        linked_project = get_project_or_404(db, product.source_project_id)
+        ensure_project_access(linked_project, current_user, "use")
+
+        if linked_project.company_id != company_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Source project must belong to your company",
+            )
+
+    new_product = models.SoftwareProduct(
+        company_id=company_id,
+        source_project_id=product.source_project_id,
+
+        software_name=product.software_name.strip(),
+        software_type=normalize_project_type(product.software_type),
+        description=product.description,
+
+        base_price=product.base_price or 0,
+        setup_charge=product.setup_charge or 0,
+
+        recurring_amount=product.recurring_amount,
+        recurring_cycle=product.recurring_cycle,
+
+        version=product.version,
+        demo_url=product.demo_url,
+        documentation_url=product.documentation_url,
+
+        status=status_value,
+        notes=product.notes,
+        is_active=product.is_active,
+    )
+
+    db.add(new_product)
+
+    if linked_project:
+        linked_project.converted_to_software_product = True
+        linked_project.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(new_product)
+
+    return new_product
+
+
+@router.get("/software-products", response_model=list[SoftwareProductResponse])
+def get_software_products(
+    company_id: Optional[int] = None,
+    status_filter: Optional[str] = None,
+    active_only: bool = True,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    ensure_sales_permission(current_user)
+
+    query = db.query(models.SoftwareProduct)
+
+    if is_admin_user(current_user):
+        if normalize_role(current_user.role) == "super-admin":
+            if company_id:
+                query = query.filter(models.SoftwareProduct.company_id == company_id)
+        else:
+            query = query.filter(
+                models.SoftwareProduct.company_id == current_user.company_id
+            )
+    else:
+        query = query.filter(
+            models.SoftwareProduct.company_id == current_user.company_id
+        )
+
+    if active_only:
+        query = query.filter(models.SoftwareProduct.is_active == True)
+
+    if status_filter:
+        status_value = normalize_status(status_filter, default="active")
+        validate_software_product_status(status_value)
+        query = query.filter(models.SoftwareProduct.status == status_value)
+
+    products = query.order_by(models.SoftwareProduct.id.desc()).all()
+
+    return products
+
+
+@router.get("/software-products/{software_product_id}", response_model=SoftwareProductResponse)
+def get_software_product(
+    software_product_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    software_product = get_software_product_or_404(db, software_product_id)
+    ensure_software_product_access(software_product, current_user, "access")
+
+    return software_product
+
+
+@router.put("/software-products/{software_product_id}", response_model=SoftwareProductResponse)
+def update_software_product(
+    software_product_id: int,
+    product_update: SoftwareProductUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    ensure_sales_admin(current_user)
+
+    software_product = get_software_product_or_404(db, software_product_id)
+    ensure_software_product_access(software_product, current_user, "update")
+
+    update_data = product_update.model_dump(exclude_unset=True)
+
+    if "status" in update_data and update_data["status"]:
+        status_value = normalize_status(update_data["status"], default="active")
+        validate_software_product_status(status_value)
+        update_data["status"] = status_value
+
+    if "software_type" in update_data and update_data["software_type"]:
+        update_data["software_type"] = normalize_project_type(
+            update_data["software_type"]
+        )
+
+    if "source_project_id" in update_data and update_data["source_project_id"]:
+        linked_project = get_project_or_404(db, update_data["source_project_id"])
+        ensure_project_access(linked_project, current_user, "use")
+
+        if linked_project.company_id != software_product.company_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Source project must belong to this software product company",
+            )
+
+    for key, value in update_data.items():
+        setattr(software_product, key, value)
+
+    software_product.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(software_product)
+
+    return software_product
+
+
+@router.delete("/software-products/{software_product_id}")
+def delete_software_product(
+    software_product_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    ensure_sales_admin(current_user)
+
+    software_product = get_software_product_or_404(db, software_product_id)
+    ensure_software_product_access(software_product, current_user, "delete")
+
+    software_product.is_active = False
+    software_product.status = "inactive"
+    software_product.updated_at = datetime.utcnow()
+
+    db.commit()
+
+    return {
+        "message": "Software product deactivated successfully",
+    }
+
+
+@router.post("/projects/{project_id}/convert-to-software-product", response_model=SoftwareProductResponse)
+def convert_project_to_software_product(
+    project_id: int,
+    product_data: ProjectToSoftwareProductRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    ensure_sales_admin(current_user)
+
+    project = get_project_or_404(db, project_id)
+    ensure_project_access(project, current_user, "convert")
+
+    if normalize_status(project.status, default="ongoing") != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail="Only completed project can be converted to software product",
+        )
+
+    existing_product = db.query(models.SoftwareProduct).filter(
+        models.SoftwareProduct.source_project_id == project.id,
+        models.SoftwareProduct.is_active == True,
+    ).first()
+
+    if existing_product:
+        raise HTTPException(
+            status_code=400,
+            detail="Software product already created from this project",
+        )
+
+    new_product = models.SoftwareProduct(
+        company_id=project.company_id,
+        source_project_id=project.id,
+
+        software_name=product_data.software_name or project.title,
+        software_type=normalize_project_type(product_data.software_type),
+        description=product_data.description or project.description,
+
+        base_price=product_data.base_price
+        if product_data.base_price is not None
+        else float(project.project_amount or 0),
+        setup_charge=product_data.setup_charge or 0,
+
+        recurring_amount=product_data.recurring_amount or project.recurring_amount,
+        recurring_cycle=product_data.recurring_cycle or project.recurring_cycle,
+
+        version=product_data.version,
+        demo_url=product_data.demo_url,
+        documentation_url=product_data.documentation_url,
+
+        status="active",
+        notes=product_data.notes or project.admin_remarks,
+        is_active=True,
+    )
+
+    project.converted_to_software_product = True
+    project.updated_at = datetime.utcnow()
+
+    db.add(new_product)
+    db.commit()
+    db.refresh(new_product)
+
+    return new_product
+
+
 # -----------------------------
 # SALES LEAD APIs
 # -----------------------------
@@ -613,8 +1199,44 @@ def create_sales_lead(
 
     priority = normalize_priority(lead.priority)
 
+    selected_software_product = None
+
+    expected_value = lead.expected_value
+    proposal_amount = lead.proposal_amount
+    recurring_amount = lead.recurring_amount
+    recurring_cycle = lead.recurring_cycle
+
+    if service_type == "existing_software" and lead.software_product_id:
+        selected_software_product = get_software_product_or_404(
+            db,
+            lead.software_product_id,
+        )
+        ensure_software_product_access(selected_software_product, current_user, "use")
+
+        if selected_software_product.company_id != company_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Selected software product must belong to this company",
+            )
+
+        product_total_price = get_software_product_total_price(selected_software_product)
+
+        if expected_value is None:
+            expected_value = product_total_price
+
+        if proposal_amount is None:
+            proposal_amount = product_total_price
+
+        if recurring_amount is None:
+            recurring_amount = selected_software_product.recurring_amount
+
+        if not recurring_cycle:
+            recurring_cycle = selected_software_product.recurring_cycle
+
     new_lead = models.SalesLead(
         company_id=company_id,
+        software_product_id=selected_software_product.id if selected_software_product else None,
+
         sales_rep_user_id=sales_rep_user_id,
         created_by_user_id=current_user.id,
 
@@ -631,12 +1253,12 @@ def create_sales_lead(
         status=status_value,
         priority=priority,
 
-        expected_value=lead.expected_value,
-        proposal_amount=lead.proposal_amount,
+        expected_value=expected_value,
+        proposal_amount=proposal_amount,
         final_sale_amount=lead.final_sale_amount,
 
-        recurring_amount=lead.recurring_amount,
-        recurring_cycle=lead.recurring_cycle,
+        recurring_amount=recurring_amount,
+        recurring_cycle=recurring_cycle,
 
         follow_up_date=lead.follow_up_date,
 
@@ -803,16 +1425,56 @@ def update_sales_lead(
                 detail="Only admin can remove lead assignment",
             )
 
+    if "software_product_id" in update_data and update_data["software_product_id"]:
+        selected_software_product = get_software_product_or_404(
+            db,
+            update_data["software_product_id"],
+        )
+        ensure_software_product_access(selected_software_product, current_user, "use")
+
+        if normalize_role(current_user.role) != "super-admin":
+            if selected_software_product.company_id != lead.company_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Selected software product must belong to this lead company",
+                )
+
+        update_data["service_type"] = "existing_software"
+        update_data["service_interest"] = "existing_software"
+        update_data["project_required"] = True
+
+        product_total_price = get_software_product_total_price(selected_software_product)
+
+        if update_data.get("expected_value") is None and not lead.expected_value:
+            update_data["expected_value"] = product_total_price
+
+        if update_data.get("proposal_amount") is None and not lead.proposal_amount:
+            update_data["proposal_amount"] = product_total_price
+
+        if update_data.get("recurring_amount") is None and not lead.recurring_amount:
+            update_data["recurring_amount"] = selected_software_product.recurring_amount
+
+        if update_data.get("recurring_cycle") is None and not lead.recurring_cycle:
+            update_data["recurring_cycle"] = selected_software_product.recurring_cycle
+
+    if "software_product_id" in update_data and update_data["software_product_id"] is None:
+        update_data["software_product_id"] = None
+
     for key, value in update_data.items():
         setattr(lead, key, value)
 
     lead.updated_at = datetime.utcnow()
 
+    ensure_commission_for_sales_lead(
+        db=db,
+        lead=lead,
+        remarks="Auto-created from lead update.",
+    )
+
     db.commit()
     db.refresh(lead)
 
     return lead
-
 
 @router.put("/leads/{lead_id}/status", response_model=SalesLeadResponse)
 def update_sales_lead_status(
@@ -848,11 +1510,16 @@ def update_sales_lead_status(
 
     lead.updated_at = datetime.utcnow()
 
+    ensure_commission_for_sales_lead(
+        db=db,
+        lead=lead,
+        remarks="Auto-created from lead status update.",
+    )
+
     db.commit()
     db.refresh(lead)
 
     return lead
-
 
 @router.post("/leads/{lead_id}/convert", response_model=LeadConvertResponse)
 def convert_sales_lead(
@@ -877,72 +1544,79 @@ def convert_sales_lead(
             detail="Lost or not interested lead cannot be converted",
         )
 
-    if convert_data.final_sale_amount <= 0:
+    selected_software_product = None
+
+    if lead.service_type == "existing_software":
+        software_product_id = convert_data.software_product_id or lead.software_product_id
+
+        if not software_product_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Select software product before converting existing software lead",
+            )
+
+        selected_software_product = get_software_product_or_404(
+            db,
+            software_product_id,
+        )
+        ensure_software_product_access(selected_software_product, current_user, "use")
+
+        if selected_software_product.company_id != lead.company_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Selected software product must belong to this lead company",
+            )
+
+        lead.software_product_id = selected_software_product.id
+
+    final_sale_amount = convert_data.final_sale_amount
+
+    if final_sale_amount is None:
+        if selected_software_product:
+            final_sale_amount = get_software_product_total_price(
+                selected_software_product
+            )
+        else:
+            final_sale_amount = lead.proposal_amount or lead.expected_value
+
+    if not final_sale_amount or final_sale_amount <= 0:
         raise HTTPException(
             status_code=400,
             detail="Final sale amount must be greater than 0",
         )
 
-    if convert_data.commission_percentage < 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Commission percentage cannot be negative",
-        )
-
-    existing_commission = db.query(models.SalesCommission).filter(
-        models.SalesCommission.lead_id == lead.id
-    ).first()
-
-    new_commission = None
-
-    if convert_data.commission_percentage > 0:
-        if existing_commission:
-            raise HTTPException(
-                status_code=400,
-                detail="Commission already generated for this lead",
-            )
-
-        commission_amount = round(
-            convert_data.final_sale_amount * convert_data.commission_percentage / 100,
-            2,
-        )
-
-        new_commission = models.SalesCommission(
-            company_id=lead.company_id,
-            sales_rep_user_id=lead.sales_rep_user_id,
-            lead_id=lead.id,
-            sale_amount=convert_data.final_sale_amount,
-            commission_percentage=convert_data.commission_percentage,
-            commission_amount=commission_amount,
-            status="pending",
-            payment_date=None,
-            remarks=convert_data.remarks,
-        )
-
-        db.add(new_commission)
-
     lead.status = "converted"
-    lead.final_sale_amount = convert_data.final_sale_amount
+    lead.final_sale_amount = final_sale_amount
     lead.converted_date = date.today()
-    lead.project_required = lead.service_type in PROJECT_REQUIRED_SERVICE_TYPES
+
+    if selected_software_product:
+        lead.recurring_amount = selected_software_product.recurring_amount
+        lead.recurring_cycle = selected_software_product.recurring_cycle
+
+    lead.project_required = True
 
     if convert_data.remarks:
         lead.notes = convert_data.remarks
 
     lead.updated_at = datetime.utcnow()
 
+    commission_record = ensure_commission_for_sales_lead(
+        db=db,
+        lead=lead,
+        remarks="Auto-created after lead conversion.",
+    )
+
     db.commit()
     db.refresh(lead)
 
-    if new_commission:
-        db.refresh(new_commission)
+    if commission_record:
+        db.refresh(commission_record)
 
     return {
         "message": "Lead converted successfully",
         "lead": lead,
-        "commission": new_commission,
+        "commission": commission_record,
     }
-
 
 @router.post("/leads/{lead_id}/deliver", response_model=SalesLeadResponse)
 def deliver_sales_lead(
@@ -969,11 +1643,16 @@ def deliver_sales_lead(
 
     lead.updated_at = datetime.utcnow()
 
+    ensure_commission_for_sales_lead(
+        db=db,
+        lead=lead,
+        remarks="Auto-created after lead delivery.",
+    )
+
     db.commit()
     db.refresh(lead)
 
     return lead
-
 
 @router.post("/leads/{lead_id}/complete", response_model=SalesLeadResponse)
 def complete_sales_lead(
@@ -993,10 +1672,21 @@ def complete_sales_lead(
         )
 
     lead.status = "completed"
-    lead.completed_date = date.today()
+
+    if not lead.completed_date:
+        lead.completed_date = date.today()
 
     if complete_data.completion_notes is not None:
         lead.completion_notes = complete_data.completion_notes
+
+    if not lead.final_sale_amount:
+        lead.final_sale_amount = lead.proposal_amount or lead.expected_value or 0
+
+    ensure_commission_for_sales_lead(
+        db=db,
+        lead=lead,
+        remarks="Auto-created from lead completion.",
+    )
 
     lead.updated_at = datetime.utcnow()
 
@@ -1004,7 +1694,6 @@ def complete_sales_lead(
     db.refresh(lead)
 
     return lead
-
 
 @router.post("/leads/{lead_id}/create-project", response_model=CRMProjectResponse)
 def create_project_from_lead(
@@ -1035,6 +1724,22 @@ def create_project_from_lead(
                 detail="Project already created for this lead",
             )
 
+    selected_software_product = None
+    software_product_id = project_data.software_product_id or lead.software_product_id
+
+    if software_product_id:
+        selected_software_product = get_software_product_or_404(
+            db,
+            software_product_id,
+        )
+        ensure_software_product_access(selected_software_product, current_user, "use")
+
+        if selected_software_product.company_id != lead.company_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Selected software product must belong to this lead company",
+            )
+
     project_type = normalize_project_type(
         project_data.project_type or lead.service_type
     )
@@ -1044,13 +1749,22 @@ def create_project_from_lead(
 
     priority = normalize_priority(project_data.priority)
 
+    default_project_title = f"{lead.client_name} Project"
+
+    if selected_software_product:
+        default_project_title = (
+            f"{lead.client_name} - {selected_software_product.software_name} Implementation"
+        )
+
     new_project = models.CRMProject(
         company_id=lead.company_id,
         lead_id=lead.id,
+        software_product_id=selected_software_product.id if selected_software_product else None,
+
         assigned_to_user_id=project_data.assigned_to_user_id,
         created_by_user_id=current_user.id,
 
-        title=project_data.title or f"{lead.client_name} Project",
+        title=project_data.title or default_project_title,
         description=project_data.description,
 
         project_type=project_type,
@@ -1585,6 +2299,7 @@ def create_crm_project(
     ensure_sales_permission(current_user)
 
     linked_lead = None
+    selected_software_product = None
 
     if project.lead_id:
         linked_lead = get_lead_or_404(db, project.lead_id)
@@ -1600,6 +2315,24 @@ def create_crm_project(
                 detail="Super admin must create project from a lead or use a company-linked account",
             )
 
+    software_product_id = project.software_product_id
+
+    if not software_product_id and linked_lead:
+        software_product_id = linked_lead.software_product_id
+
+    if software_product_id:
+        selected_software_product = get_software_product_or_404(
+            db,
+            software_product_id,
+        )
+        ensure_software_product_access(selected_software_product, current_user, "use")
+
+        if selected_software_product.company_id != company_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Selected software product must belong to this project company",
+            )
+
     project_type = normalize_project_type(project.project_type)
     status_value = normalize_status(project.status, default="ongoing")
 
@@ -1610,6 +2343,7 @@ def create_crm_project(
     new_project = models.CRMProject(
         company_id=company_id,
         lead_id=project.lead_id,
+        software_product_id=selected_software_product.id if selected_software_product else None,
 
         assigned_to_user_id=project.assigned_to_user_id,
         created_by_user_id=current_user.id,
@@ -1759,6 +2493,23 @@ def update_crm_project(
 
         update_data["company_id"] = linked_lead.company_id
 
+    if "software_product_id" in update_data and update_data["software_product_id"]:
+        selected_software_product = get_software_product_or_404(
+            db,
+            update_data["software_product_id"],
+        )
+        ensure_software_product_access(selected_software_product, current_user, "use")
+
+        if normalize_role(current_user.role) != "super-admin":
+            if selected_software_product.company_id != project.company_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Selected software product must belong to this project company",
+                )
+
+    if "software_product_id" in update_data and update_data["software_product_id"] is None:
+        update_data["software_product_id"] = None
+
     for key, value in update_data.items():
         setattr(project, key, value)
 
@@ -1844,6 +2595,240 @@ def delete_crm_project(
 
     return {
         "message": "CRM project deleted successfully",
+    }
+
+
+# -----------------------------
+# PROJECT ISSUE / MAINTENANCE APIs
+# -----------------------------
+
+@router.post("/project-issues", response_model=ProjectIssueResponse)
+def create_project_issue(
+    issue_data: ProjectIssueCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    ensure_maintenance_permission(current_user)
+
+    issue_type = normalize_issue_type(issue_data.issue_type)
+    status_value = normalize_status(issue_data.status, default="open")
+    validate_project_issue_status(status_value)
+
+    priority = normalize_priority(issue_data.priority)
+
+    linked_project = None
+
+    if issue_type == "project_issue":
+        if not issue_data.project_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Project is required for project issue",
+            )
+
+        linked_project = get_project_or_404(db, issue_data.project_id)
+        ensure_project_access(linked_project, current_user, "raise issue for")
+
+        project_status = normalize_status(linked_project.status, default="ongoing")
+
+        if project_status not in {"delivered", "completed"}:
+            raise HTTPException(
+                status_code=400,
+                detail="Maintenance issue can be raised only for delivered or completed project",
+            )
+
+        company_id = linked_project.company_id
+
+    else:
+        ensure_company_user(current_user)
+
+        company_id = current_user.company_id
+
+        if normalize_role(current_user.role) == "super-admin" and not company_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Super admin must use company-linked account for company issue",
+            )
+
+    new_issue = models.ProjectIssue(
+        company_id=company_id,
+        project_id=linked_project.id if linked_project else None,
+        created_by_user_id=current_user.id,
+
+        issue_type=issue_type,
+
+        title=issue_data.title.strip(),
+        description=issue_data.description,
+
+        priority=priority,
+        status=status_value,
+
+        remarks=issue_data.remarks,
+        is_active=True,
+    )
+
+    db.add(new_issue)
+    db.commit()
+    db.refresh(new_issue)
+
+    return new_issue
+
+
+@router.get("/project-issues", response_model=list[ProjectIssueResponse])
+def get_project_issues(
+    company_id: Optional[int] = None,
+    project_id: Optional[int] = None,
+    status_filter: Optional[str] = None,
+    priority_filter: Optional[str] = None,
+    active_only: bool = True,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    ensure_maintenance_permission(current_user)
+
+    query = db.query(models.ProjectIssue)
+
+    if is_admin_user(current_user):
+        if normalize_role(current_user.role) == "super-admin":
+            if company_id:
+                query = query.filter(models.ProjectIssue.company_id == company_id)
+        else:
+            query = query.filter(
+                models.ProjectIssue.company_id == current_user.company_id
+            )
+    else:
+        query = query.filter(
+            models.ProjectIssue.company_id == current_user.company_id
+        )
+
+    if active_only:
+        query = query.filter(models.ProjectIssue.is_active == True)
+
+    if project_id:
+        query = query.filter(models.ProjectIssue.project_id == project_id)
+
+    if status_filter:
+        status_value = normalize_status(status_filter, default="open")
+        validate_project_issue_status(status_value)
+        query = query.filter(models.ProjectIssue.status == status_value)
+
+    if priority_filter:
+        priority_value = normalize_priority(priority_filter)
+        query = query.filter(models.ProjectIssue.priority == priority_value)
+
+    issues = query.order_by(models.ProjectIssue.id.desc()).all()
+
+    return issues
+
+
+@router.get("/project-issues/{issue_id}", response_model=ProjectIssueResponse)
+def get_project_issue(
+    issue_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    issue = get_project_issue_or_404(db, issue_id)
+    ensure_project_issue_access(issue, current_user, "access")
+
+    return issue
+
+
+@router.put("/project-issues/{issue_id}", response_model=ProjectIssueResponse)
+def update_project_issue(
+    issue_id: int,
+    issue_update: ProjectIssueUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    issue = get_project_issue_or_404(db, issue_id)
+    ensure_project_issue_access(issue, current_user, "update")
+
+    update_data = issue_update.model_dump(exclude_unset=True)
+
+    if "issue_type" in update_data and update_data["issue_type"]:
+        update_data["issue_type"] = normalize_issue_type(update_data["issue_type"])
+
+    if "status" in update_data and update_data["status"]:
+        status_value = normalize_status(update_data["status"], default="open")
+        validate_project_issue_status(status_value)
+        update_data["status"] = status_value
+
+    if "priority" in update_data and update_data["priority"]:
+        update_data["priority"] = normalize_priority(update_data["priority"])
+
+    if "project_id" in update_data and update_data["project_id"]:
+        linked_project = get_project_or_404(db, update_data["project_id"])
+        ensure_project_access(linked_project, current_user, "link issue with")
+
+        project_status = normalize_status(linked_project.status, default="ongoing")
+
+        if project_status not in {"delivered", "completed"}:
+            raise HTTPException(
+                status_code=400,
+                detail="Maintenance issue can be linked only with delivered or completed project",
+            )
+
+        if normalize_role(current_user.role) != "super-admin":
+            if linked_project.company_id != issue.company_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Project must belong to this issue company",
+                )
+
+        update_data["company_id"] = linked_project.company_id
+
+    for key, value in update_data.items():
+        setattr(issue, key, value)
+
+    issue.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(issue)
+
+    return issue
+
+
+@router.put("/project-issues/{issue_id}/status", response_model=ProjectIssueResponse)
+def update_project_issue_status(
+    issue_id: int,
+    status_data: ProjectIssueStatusUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    issue = get_project_issue_or_404(db, issue_id)
+    ensure_project_issue_access(issue, current_user, "update")
+
+    status_value = normalize_status(status_data.status, default="open")
+    validate_project_issue_status(status_value)
+
+    issue.status = status_value
+
+    if status_data.remarks is not None:
+        issue.remarks = status_data.remarks
+
+    issue.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(issue)
+
+    return issue
+
+
+@router.delete("/project-issues/{issue_id}")
+def delete_project_issue(
+    issue_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    issue = get_project_issue_or_404(db, issue_id)
+    ensure_project_issue_access(issue, current_user, "delete")
+
+    issue.is_active = False
+    issue.updated_at = datetime.utcnow()
+
+    db.commit()
+
+    return {
+        "message": "Maintenance issue deleted successfully",
     }
 
 

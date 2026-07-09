@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   ClipboardList,
   Clock,
-  IndianRupee,
   Plus,
   PlusCircle,
   Search,
@@ -21,6 +20,8 @@ import { useAuth } from "../context/AuthContext";
 const ADMIN_ROLES = [
   "super-admin",
   "company-admin",
+  "admin",
+  "owner",
   "hr",
   "manager",
   "accountant",
@@ -61,6 +62,14 @@ const formatLabel = (value) => {
     .join(" ");
 };
 
+const normalizeRole = (value) => {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("_", "-")
+    .replaceAll(" ", "-");
+};
+
 const normalizeStatus = (value, fallback = "ongoing") => {
   if (!value) return fallback;
   return String(value).trim().toLowerCase().replaceAll("_", "-");
@@ -86,13 +95,18 @@ const formatCurrency = (value) => {
   }).format(amount);
 };
 
-const getEmptyProjectForm = () => ({
-  source_type: "own_company",
+const getSoftwareProductPrice = (product) => {
+  if (!product) return 0;
+  return Number(product.base_price || 0) + Number(product.setup_charge || 0);
+};
+
+const getEmptyProjectForm = (sourceType = "own_company") => ({
+  source_type: sourceType,
   lead_id: "",
-  assigned_to_user_id: "",
-  title: "Own Company Project",
+  software_product_id: "",
+  title: sourceType === "own_company" ? "Own Company Project" : "",
   description: "",
-  project_type: "internal_project",
+  project_type: sourceType === "own_company" ? "internal_project" : "custom_software",
   priority: "medium",
   project_amount: "",
   recurring_amount: "",
@@ -102,13 +116,33 @@ const getEmptyProjectForm = () => ({
   admin_remarks: "",
 });
 
+const getEmptySoftwareForm = (project = null) => ({
+  software_name: project?.title || "",
+  software_type: "existing_software",
+  description: project?.description || "",
+  base_price:
+    project?.project_amount !== null && project?.project_amount !== undefined
+      ? String(project.project_amount || "")
+      : "",
+  setup_charge: "0",
+  recurring_amount:
+    project?.recurring_amount !== null && project?.recurring_amount !== undefined
+      ? String(project.recurring_amount || "")
+      : "",
+  recurring_cycle: project?.recurring_cycle || "",
+  version: "",
+  demo_url: "",
+  documentation_url: "",
+  notes: project?.admin_remarks || "",
+});
+
 export default function ProjectsPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
   const [projects, setProjects] = useState([]);
   const [leads, setLeads] = useState([]);
-  const [users, setUsers] = useState([]);
+  const [softwareProducts, setSoftwareProducts] = useState([]);
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -122,22 +156,23 @@ export default function ProjectsPage() {
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [projectForm, setProjectForm] = useState(getEmptyProjectForm());
 
-  const isAdminUser = ADMIN_ROLES.includes(user?.role);
-  const canManageProjects = isAdminUser || user?.role === "manager";
+  const [showSoftwareModal, setShowSoftwareModal] = useState(false);
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [softwareForm, setSoftwareForm] = useState(getEmptySoftwareForm());
 
-  const assignableUsers = useMemo(() => {
-    return users.filter((item) =>
-      [
-        "employee",
-        "intern",
-        "manager",
-        "sales-representative",
-        "freelancer",
-        "hr",
-        "company-admin",
-      ].includes(item.role)
-    );
-  }, [users]);
+  const userRole = normalizeRole(user?.role);
+  const isAdminUser = ADMIN_ROLES.includes(userRole);
+  const canManageProjects = isAdminUser || userRole === "manager";
+
+  const softwareProductMap = useMemo(() => {
+    const map = new Map();
+
+    softwareProducts.forEach((product) => {
+      map.set(Number(product.id), product);
+    });
+
+    return map;
+  }, [softwareProducts]);
 
   const convertedLeads = useMemo(() => {
     return leads.filter((lead) => {
@@ -163,18 +198,12 @@ export default function ProjectsPage() {
       (item) => normalizeStatus(item.status) === "cancelled"
     ).length;
 
-    const totalAmount = projects.reduce(
-      (sum, item) => sum + Number(item.project_amount || 0),
-      0
-    );
-
     return {
       total: projects.length,
       active,
       delivered,
       completed,
       cancelled,
-      totalAmount,
     };
   }, [projects]);
 
@@ -219,6 +248,14 @@ export default function ProjectsPage() {
     return projectModules.find((item) => item.key === activeView) || null;
   }, [projectModules, activeView]);
 
+  const getSoftwareProductName = (softwareProductId) => {
+    if (!softwareProductId) return "";
+
+    const product = softwareProductMap.get(Number(softwareProductId));
+
+    return product?.software_name || "";
+  };
+
   const filteredProjects = useMemo(() => {
     if (!activeView) return [];
 
@@ -227,6 +264,7 @@ export default function ProjectsPage() {
     return projects.filter((project) => {
       const status = normalizeStatus(project.status);
       const type = normalizeType(project.project_type);
+      const softwareName = getSoftwareProductName(project.software_product_id);
 
       const viewMatch =
         activeView === "active"
@@ -247,6 +285,7 @@ export default function ProjectsPage() {
         project.client_company_name,
         project.admin_remarks,
         project.submission_note,
+        softwareName,
       ]
         .filter(Boolean)
         .join(" ")
@@ -258,7 +297,14 @@ export default function ProjectsPage() {
 
       return viewMatch && searchMatch && statusMatch && typeMatch;
     });
-  }, [projects, activeView, searchText, statusFilter, typeFilter]);
+  }, [
+    projects,
+    activeView,
+    searchText,
+    statusFilter,
+    typeFilter,
+    softwareProductMap,
+  ]);
 
   const totalPages = Math.max(
     1,
@@ -294,21 +340,19 @@ export default function ProjectsPage() {
     }
   };
 
-  const fetchUsers = async () => {
-    if (!isAdminUser) return;
-
+  const fetchSoftwareProducts = async () => {
     try {
-      const response = await api.get("/users");
-      setUsers(Array.isArray(response.data) ? response.data : []);
+      const response = await api.get("/sales/software-products");
+      setSoftwareProducts(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
-      console.error("Users loading error:", error);
+      console.error("Software products loading error:", error);
     }
   };
 
   const fetchAll = async () => {
     try {
       setLoading(true);
-      await Promise.all([fetchProjects(), fetchLeads(), fetchUsers()]);
+      await Promise.all([fetchProjects(), fetchLeads(), fetchSoftwareProducts()]);
     } finally {
       setLoading(false);
     }
@@ -357,24 +401,6 @@ export default function ProjectsPage() {
         [name]: value,
       };
 
-      if (name === "source_type") {
-        if (value === "own_company") {
-          return {
-            ...getEmptyProjectForm(),
-            source_type: "own_company",
-            title: "Own Company Project",
-            project_type: "internal_project",
-          };
-        }
-
-        return {
-          ...getEmptyProjectForm(),
-          source_type: "converted_lead",
-          title: "",
-          project_type: "custom_software",
-        };
-      }
-
       if (name === "lead_id") {
         const foundLead = convertedLeads.find(
           (lead) => String(lead.id) === String(value)
@@ -385,9 +411,16 @@ export default function ProjectsPage() {
             foundLead.service_type || foundLead.service_interest
           );
 
+          const softwareName = getSoftwareProductName(foundLead.software_product_id);
+
           return {
             ...next,
-            title: `${foundLead.client_name} - ${formatLabel(leadType)}`,
+            software_product_id: foundLead.software_product_id
+              ? String(foundLead.software_product_id)
+              : "",
+            title: softwareName
+              ? `${foundLead.client_name} - ${softwareName} Implementation`
+              : `${foundLead.client_name} - ${formatLabel(leadType)}`,
             description: foundLead.notes || "",
             project_type: leadType,
             priority: foundLead.priority || "medium",
@@ -395,35 +428,58 @@ export default function ProjectsPage() {
               foundLead.final_sale_amount ||
               foundLead.proposal_amount ||
               foundLead.expected_value ||
-              "",
+              0,
             recurring_amount: foundLead.recurring_amount || "",
             recurring_cycle: foundLead.recurring_cycle || "",
           };
         }
+
+        return {
+          ...next,
+          software_product_id: "",
+          title: "",
+          description: "",
+          project_type: "custom_software",
+          priority: "medium",
+          project_amount: "",
+          recurring_amount: "",
+          recurring_cycle: "",
+        };
       }
 
       return next;
     });
   };
 
-  const openProjectModal = (sourceType = "own_company") => {
-    if (sourceType === "converted_lead") {
-      setProjectForm({
-        ...getEmptyProjectForm(),
-        source_type: "converted_lead",
-        title: "",
-        project_type: "custom_software",
-      });
-    } else {
-      setProjectForm(getEmptyProjectForm());
-    }
+  const updateSoftwareField = (event) => {
+    const { name, value } = event.target;
 
+    setSoftwareForm((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  const openProjectModal = (sourceType = "own_company") => {
+    setProjectForm(getEmptyProjectForm(sourceType));
     setShowProjectModal(true);
   };
 
   const closeProjectModal = () => {
     setProjectForm(getEmptyProjectForm());
     setShowProjectModal(false);
+  };
+
+  const openSoftwareModal = (project) => {
+    setSelectedProject(project);
+    setSoftwareForm(getEmptySoftwareForm(project));
+    setShowSoftwareModal(true);
+  };
+
+  const closeSoftwareModal = () => {
+    setSelectedProject(null);
+    setSoftwareForm(getEmptySoftwareForm());
+    setShowSoftwareModal(false);
   };
 
   const handleCreateProject = async (event) => {
@@ -434,13 +490,13 @@ export default function ProjectsPage() {
       return;
     }
 
-    if (!projectForm.title.trim()) {
-      alert("Project title is required");
+    if (projectForm.source_type === "converted_lead" && !projectForm.lead_id) {
+      alert("Select converted lead");
       return;
     }
 
-    if (projectForm.source_type === "converted_lead" && !projectForm.lead_id) {
-      alert("Select converted lead");
+    if (!projectForm.title.trim()) {
+      alert("Project title is required");
       return;
     }
 
@@ -453,11 +509,20 @@ export default function ProjectsPage() {
           )
         : null;
 
+      const leadProjectAmount =
+        selectedLead?.final_sale_amount ||
+        selectedLead?.proposal_amount ||
+        selectedLead?.expected_value ||
+        projectForm.project_amount ||
+        0;
+
+      const softwareProductId =
+        selectedLead?.software_product_id || projectForm.software_product_id || null;
+
       const payload = {
         lead_id: projectForm.lead_id ? Number(projectForm.lead_id) : null,
-        assigned_to_user_id: projectForm.assigned_to_user_id
-          ? Number(projectForm.assigned_to_user_id)
-          : null,
+        software_product_id: softwareProductId ? Number(softwareProductId) : null,
+        assigned_to_user_id: null,
         title: projectForm.title.trim(),
         description: projectForm.description.trim() || null,
         project_type: normalizeType(projectForm.project_type),
@@ -469,13 +534,19 @@ export default function ProjectsPage() {
         client_company_name:
           selectedLead?.client_company_name ||
           (projectForm.source_type === "own_company" ? "AeroState Lab" : null),
-        project_amount: projectForm.project_amount
-          ? Number(projectForm.project_amount)
-          : 0,
-        recurring_amount: projectForm.recurring_amount
-          ? Number(projectForm.recurring_amount)
-          : null,
-        recurring_cycle: projectForm.recurring_cycle || null,
+        project_amount:
+          projectForm.source_type === "converted_lead"
+            ? Number(leadProjectAmount || 0)
+            : 0,
+        recurring_amount:
+          projectForm.source_type === "converted_lead" &&
+          selectedLead?.recurring_amount
+            ? Number(selectedLead.recurring_amount)
+            : null,
+        recurring_cycle:
+          projectForm.source_type === "converted_lead"
+            ? selectedLead?.recurring_cycle || null
+            : null,
         start_date: projectForm.start_date || null,
         due_date: projectForm.due_date || null,
         admin_remarks: projectForm.admin_remarks.trim() || null,
@@ -515,6 +586,56 @@ export default function ProjectsPage() {
     }
   };
 
+  const handleConvertProjectToSoftware = async (event) => {
+    event.preventDefault();
+
+    if (!selectedProject) return;
+
+    if (!softwareForm.software_name.trim()) {
+      alert("Software name is required");
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      const payload = {
+        software_name: softwareForm.software_name.trim(),
+        software_type: normalizeType(softwareForm.software_type || "existing_software"),
+        description: softwareForm.description.trim() || null,
+        base_price: softwareForm.base_price ? Number(softwareForm.base_price) : 0,
+        setup_charge: softwareForm.setup_charge
+          ? Number(softwareForm.setup_charge)
+          : 0,
+        recurring_amount: softwareForm.recurring_amount
+          ? Number(softwareForm.recurring_amount)
+          : null,
+        recurring_cycle: softwareForm.recurring_cycle || null,
+        version: softwareForm.version.trim() || null,
+        demo_url: softwareForm.demo_url.trim() || null,
+        documentation_url: softwareForm.documentation_url.trim() || null,
+        notes: softwareForm.notes.trim() || null,
+      };
+
+      await api.post(
+        `/sales/projects/${selectedProject.id}/convert-to-software-product`,
+        payload
+      );
+
+      closeSoftwareModal();
+      await fetchAll();
+
+      alert("Software product created successfully");
+    } catch (error) {
+      alert(
+        error?.response?.data?.detail ||
+          "Failed to convert project to software product"
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleDeleteProject = async (projectId) => {
     const confirmDelete = window.confirm(
       "Are you sure you want to delete this project?"
@@ -534,6 +655,12 @@ export default function ProjectsPage() {
   const renderProjectRow = (project) => {
     const status = normalizeStatus(project.status);
     const type = normalizeType(project.project_type);
+    const softwareName = getSoftwareProductName(project.software_product_id);
+
+    const canAddAsSoftware =
+      isAdminUser &&
+      status === "completed" &&
+      !project.converted_to_software_product;
 
     return (
       <article className="project-row" key={project.id}>
@@ -555,7 +682,11 @@ export default function ProjectsPage() {
         <div className="project-detail-cell">
           <span>Type</span>
           <strong>{formatLabel(type)}</strong>
-          <small>{formatLabel(project.priority || "medium")} Priority</small>
+          <small>
+            {softwareName
+              ? `Software: ${softwareName}`
+              : `${formatLabel(project.priority || "medium")} Priority`}
+          </small>
         </div>
 
         <div className="project-detail-cell">
@@ -605,6 +736,18 @@ export default function ProjectsPage() {
             Tasks
           </button>
 
+          {project.converted_to_software_product ? (
+            <span className="software-created-pill">Software Added</span>
+          ) : canAddAsSoftware ? (
+            <button
+              type="button"
+              className="software-button"
+              onClick={() => openSoftwareModal(project)}
+            >
+              Add Software
+            </button>
+          ) : null}
+
           {isAdminUser && (
             <button
               type="button"
@@ -618,6 +761,16 @@ export default function ProjectsPage() {
       </article>
     );
   };
+
+  const modalTitle =
+    projectForm.source_type === "converted_lead"
+      ? "Start Project From Converted Lead"
+      : "Start Own Company Project";
+
+  const modalDescription =
+    projectForm.source_type === "converted_lead"
+      ? "Select a converted lead. Amount and software link will be taken automatically from the converted sale."
+      : "Create an internal company project without sales amount or recurring billing.";
 
   return (
     <>
@@ -742,7 +895,7 @@ export default function ProjectsPage() {
                 <input
                   value={searchText}
                   onChange={(event) => setSearchText(event.target.value)}
-                  placeholder="Search project, client, company, type, status..."
+                  placeholder="Search project, client, company, type, software, status..."
                 />
               </div>
 
@@ -863,11 +1016,8 @@ export default function ProjectsPage() {
                   </div>
 
                   <div>
-                    <h2>Start Project</h2>
-                    <p>
-                      Create a project from converted lead or your own company
-                      work.
-                    </p>
+                    <h2>{modalTitle}</h2>
+                    <p>{modalDescription}</p>
                   </div>
                 </div>
 
@@ -881,18 +1031,6 @@ export default function ProjectsPage() {
               </div>
 
               <div className="form-content-grid">
-                <div className="form-group">
-                  <label>Project Source</label>
-                  <select
-                    name="source_type"
-                    value={projectForm.source_type}
-                    onChange={updateProjectField}
-                  >
-                    <option value="own_company">Own Company Project</option>
-                    <option value="converted_lead">Converted Lead</option>
-                  </select>
-                </div>
-
                 {projectForm.source_type === "converted_lead" && (
                   <div className="form-group">
                     <label>Converted Lead</label>
@@ -903,13 +1041,27 @@ export default function ProjectsPage() {
                       required
                     >
                       <option value="">Select converted lead</option>
-                      {convertedLeads.map((lead) => (
-                        <option key={lead.id} value={lead.id}>
-                          {lead.client_name} -{" "}
-                          {lead.client_company_name || "No company"}
-                        </option>
-                      ))}
+                      {convertedLeads.map((lead) => {
+                        const softwareName = getSoftwareProductName(
+                          lead.software_product_id
+                        );
+
+                        return (
+                          <option key={lead.id} value={lead.id}>
+                            {lead.client_name} -{" "}
+                            {softwareName ||
+                              lead.client_company_name ||
+                              "No company"}
+                          </option>
+                        );
+                      })}
                     </select>
+
+                    {convertedLeads.length === 0 && (
+                      <small className="field-help">
+                        No converted lead is available for project creation.
+                      </small>
+                    )}
                   </div>
                 )}
 
@@ -940,22 +1092,6 @@ export default function ProjectsPage() {
                 </div>
 
                 <div className="form-group">
-                  <label>Assigned To</label>
-                  <select
-                    name="assigned_to_user_id"
-                    value={projectForm.assigned_to_user_id}
-                    onChange={updateProjectField}
-                  >
-                    <option value="">Select user</option>
-                    {assignableUsers.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.full_name || item.person?.full_name || item.email}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
                   <label>Priority</label>
                   <select
                     name="priority"
@@ -967,42 +1103,6 @@ export default function ProjectsPage() {
                         {formatLabel(priority)}
                       </option>
                     ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Project Amount</label>
-                  <input
-                    name="project_amount"
-                    type="number"
-                    value={projectForm.project_amount}
-                    onChange={updateProjectField}
-                    placeholder="Amount"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Recurring Amount</label>
-                  <input
-                    name="recurring_amount"
-                    type="number"
-                    value={projectForm.recurring_amount}
-                    onChange={updateProjectField}
-                    placeholder="Optional"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Recurring Cycle</label>
-                  <select
-                    name="recurring_cycle"
-                    value={projectForm.recurring_cycle}
-                    onChange={updateProjectField}
-                  >
-                    <option value="">None</option>
-                    <option value="monthly">Monthly</option>
-                    <option value="quarterly">Quarterly</option>
-                    <option value="yearly">Yearly</option>
                   </select>
                 </div>
 
@@ -1025,6 +1125,26 @@ export default function ProjectsPage() {
                     onChange={updateProjectField}
                   />
                 </div>
+
+                {projectForm.source_type === "converted_lead" && (
+                  <div className="form-group">
+                    <label>Sale Amount</label>
+                    <input
+                      value={formatCurrency(projectForm.project_amount || 0)}
+                      readOnly
+                    />
+                  </div>
+                )}
+
+                {projectForm.software_product_id && (
+                  <div className="form-group">
+                    <label>Linked Software</label>
+                    <input
+                      value={getSoftwareProductName(projectForm.software_product_id)}
+                      readOnly
+                    />
+                  </div>
+                )}
 
                 <div className="textarea-row">
                   <div className="form-group">
@@ -1064,6 +1184,205 @@ export default function ProjectsPage() {
                   disabled={saving}
                 >
                   {saving ? "Starting..." : "Start Project"}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {showSoftwareModal && selectedProject && (
+          <div
+            className="project-modal-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) closeSoftwareModal();
+            }}
+          >
+            <form
+              className="project-modal-card software-modal-card"
+              onSubmit={handleConvertProjectToSoftware}
+            >
+              <div className="modal-header">
+                <div className="card-title-row">
+                  <div className="card-title-icon software-icon">
+                    <BriefcaseBusiness size={19} />
+                  </div>
+
+                  <div>
+                    <h2>Add Project as Software Product</h2>
+                    <p>
+                      This completed project will become reusable software for
+                      future Existing Software leads.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="modal-close-button"
+                  onClick={closeSoftwareModal}
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="software-source-card">
+                <span>Source Project</span>
+                <strong>{selectedProject.title}</strong>
+                <small>
+                  {selectedProject.client_company_name ||
+                    selectedProject.client_name ||
+                    "Own Company"}
+                </small>
+              </div>
+
+              <div className="form-content-grid">
+                <div className="form-group">
+                  <label>Software Name</label>
+                  <input
+                    name="software_name"
+                    value={softwareForm.software_name}
+                    onChange={updateSoftwareField}
+                    placeholder="Example: Loyalty Reward Management System"
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Software Type</label>
+                  <select
+                    name="software_type"
+                    value={softwareForm.software_type}
+                    onChange={updateSoftwareField}
+                  >
+                    <option value="existing_software">Existing Software</option>
+                    <option value="custom_software">Custom Software</option>
+                    <option value="social_media_management">
+                      Social Media Management
+                    </option>
+                    <option value="internal_project">Internal Project</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Base Price</label>
+                  <input
+                    name="base_price"
+                    type="number"
+                    min="0"
+                    value={softwareForm.base_price}
+                    onChange={updateSoftwareField}
+                    placeholder="Example: 50000"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Setup Charge</label>
+                  <input
+                    name="setup_charge"
+                    type="number"
+                    min="0"
+                    value={softwareForm.setup_charge}
+                    onChange={updateSoftwareField}
+                    placeholder="Example: 10000"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Recurring Amount</label>
+                  <input
+                    name="recurring_amount"
+                    type="number"
+                    min="0"
+                    value={softwareForm.recurring_amount}
+                    onChange={updateSoftwareField}
+                    placeholder="Example: 2000"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Recurring Cycle</label>
+                  <select
+                    name="recurring_cycle"
+                    value={softwareForm.recurring_cycle}
+                    onChange={updateSoftwareField}
+                  >
+                    <option value="">No recurring</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="quarterly">Quarterly</option>
+                    <option value="yearly">Yearly</option>
+                    <option value="one_time">One Time</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Version</label>
+                  <input
+                    name="version"
+                    value={softwareForm.version}
+                    onChange={updateSoftwareField}
+                    placeholder="Example: v1.0"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Demo URL</label>
+                  <input
+                    name="demo_url"
+                    value={softwareForm.demo_url}
+                    onChange={updateSoftwareField}
+                    placeholder="Demo link"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Documentation URL</label>
+                  <input
+                    name="documentation_url"
+                    value={softwareForm.documentation_url}
+                    onChange={updateSoftwareField}
+                    placeholder="Documentation link"
+                  />
+                </div>
+
+                <div className="textarea-row">
+                  <div className="form-group">
+                    <label>Description</label>
+                    <textarea
+                      name="description"
+                      value={softwareForm.description}
+                      onChange={updateSoftwareField}
+                      placeholder="Software details"
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Notes</label>
+                    <textarea
+                      name="notes"
+                      value={softwareForm.notes}
+                      onChange={updateSoftwareField}
+                      placeholder="Internal notes"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="form-actions-row">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={closeSoftwareModal}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={saving}
+                >
+                  {saving ? "Creating..." : "Create Software Product"}
                 </button>
               </div>
             </form>
@@ -1420,6 +1739,13 @@ const projectsPageStyles = `
   cursor: pointer;
 }
 
+.field-help {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .projects-list-card {
   min-height: 560px;
   overflow: hidden;
@@ -1452,7 +1778,7 @@ const projectsPageStyles = `
 .project-table-head,
 .project-row {
   display: grid;
-  grid-template-columns: minmax(230px, 1.4fr) minmax(145px, 0.85fr) minmax(145px, 0.85fr) minmax(145px, 0.85fr) minmax(160px, 0.85fr) minmax(150px, 0.7fr);
+  grid-template-columns: minmax(230px, 1.4fr) minmax(145px, 0.85fr) minmax(145px, 0.85fr) minmax(145px, 0.85fr) minmax(160px, 0.85fr) minmax(230px, 0.95fr);
   gap: 14px;
   align-items: center;
 }
@@ -1542,6 +1868,9 @@ const projectsPageStyles = `
   color: #0f172a;
   font-size: 13px;
   font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .project-detail-cell small {
@@ -1550,6 +1879,9 @@ const projectsPageStyles = `
   color: #64748b;
   font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .project-status-cell {
@@ -1597,9 +1929,11 @@ const projectsPageStyles = `
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
-.task-button {
+.task-button,
+.software-button {
   height: 38px;
   padding: 0 13px;
   border-radius: 13px;
@@ -1609,6 +1943,25 @@ const projectsPageStyles = `
   font-size: 12px;
   font-weight: 900;
   cursor: pointer;
+}
+
+.software-button {
+  border-color: #bbf7d0;
+  background: #ecfdf5;
+  color: #059669;
+}
+
+.software-created-pill {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid #bbf7d0;
+  background: #ecfdf5;
+  color: #059669;
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .icon-danger-button {
@@ -1712,6 +2065,10 @@ const projectsPageStyles = `
   padding: 18px;
 }
 
+.software-modal-card {
+  width: min(1040px, 100%);
+}
+
 .modal-header {
   display: flex;
   align-items: flex-start;
@@ -1737,6 +2094,13 @@ const projectsPageStyles = `
   color: #2563eb;
   background: #eef6ff;
   border: 1px solid #dbeafe;
+  flex-shrink: 0;
+}
+
+.software-icon {
+  color: #059669;
+  background: #ecfdf5;
+  border-color: #bbf7d0;
 }
 
 .card-title-row h2 {
@@ -1763,11 +2127,45 @@ const projectsPageStyles = `
   display: grid;
   place-items: center;
   cursor: pointer;
+  flex-shrink: 0;
+}
+
+.software-source-card {
+  min-height: 76px;
+  padding: 14px;
+  margin-bottom: 14px;
+  border-radius: 17px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.software-source-card span {
+  display: block;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.software-source-card strong {
+  display: block;
+  margin-top: 6px;
+  color: #06142b;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.software-source-card small {
+  display: block;
+  margin-top: 4px;
+  color: #52677e;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .form-content-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 13px;
 }
 
@@ -1908,8 +2306,11 @@ const projectsPageStyles = `
   }
 
   .task-button,
+  .software-button,
+  .software-created-pill,
   .icon-danger-button {
     width: 100%;
+    justify-content: center;
   }
 
   .project-modal-backdrop {
