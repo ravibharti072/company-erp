@@ -59,14 +59,29 @@ const PORTAL_OPTIONS = [
     description: "CRM and leads",
   },
   {
+    key: "software-products",
+    label: "Software Products",
+    description: "Reusable software list",
+  },
+  {
+    key: "receive-payment",
+    label: "Receive Payment",
+    description: "Payment collection",
+  },
+  {
+    key: "sales-commission",
+    label: "Sales Commission",
+    description: "Sales commission payout",
+  },
+  {
     key: "projects",
     label: "Projects",
     description: "Project tracking",
   },
   {
-    key: "freelancers",
-    label: "Freelancers",
-    description: "Freelancer work",
+    key: "maintenance",
+    label: "Maintenance",
+    description: "Project and company issues",
   },
   {
     key: "reports",
@@ -87,7 +102,6 @@ const DEFAULT_PORTAL_ACCESS_BY_ROLE = {
     "users",
     "attendance",
     "tasks",
-    "freelancers",
     "reports",
     "settings",
   ],
@@ -97,21 +111,47 @@ const DEFAULT_PORTAL_ACCESS_BY_ROLE = {
     "attendance",
     "tasks",
     "sales",
+    "software-products",
+    "receive-payment",
+    "sales-commission",
     "projects",
-    "freelancers",
+    "maintenance",
     "reports",
     "settings",
   ],
-  accountant: ["attendance", "tasks", "reports", "settings"],
+  accountant: [
+    "attendance",
+    "tasks",
+    "receive-payment",
+    "reports",
+    "settings",
+  ],
   employee: ["attendance", "tasks", "settings"],
   intern: ["attendance", "tasks", "settings"],
-  "sales-representative": ["attendance", "tasks", "sales", "settings"],
+  "sales-representative": [
+    "attendance",
+    "tasks",
+    "sales",
+    "software-products",
+    "receive-payment",
+    "sales-commission",
+    "maintenance",
+    "settings",
+  ],
   freelancer: ["attendance", "tasks", "settings"],
 };
 
 const USERS_PER_PAGE = 20;
 
 function normalizeRole(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("_", "-")
+    .replaceAll(" ", "-");
+}
+
+function normalizePortal(value) {
   return String(value || "")
     .trim()
     .toLowerCase()
@@ -142,7 +182,7 @@ function getDefaultPortalAccess(role) {
 function parsePortalAccess(value, role) {
   if (Array.isArray(value)) {
     return value
-      .map((item) => String(item || "").trim().toLowerCase())
+      .map(normalizePortal)
       .filter((item) => PORTAL_OPTIONS.some((portal) => portal.key === item));
   }
 
@@ -152,8 +192,10 @@ function parsePortalAccess(value, role) {
 
       if (Array.isArray(parsed)) {
         return parsed
-          .map((item) => String(item || "").trim().toLowerCase())
-          .filter((item) => PORTAL_OPTIONS.some((portal) => portal.key === item));
+          .map(normalizePortal)
+          .filter((item) =>
+            PORTAL_OPTIONS.some((portal) => portal.key === item)
+          );
       }
     } catch {
       return getDefaultPortalAccess(role);
@@ -732,7 +774,8 @@ export default function UsersPage() {
             <div>
               <h1>Software Users</h1>
               <p>
-                Create login access and select which portals each user can open.
+                Create software login access and choose which modules each user
+                can open.
               </p>
             </div>
           </div>
@@ -781,7 +824,7 @@ export default function UsersPage() {
                 <h2>Create Software Login</h2>
                 <p>
                   First select an onboarded person, then choose software role and
-                  portal access.
+                  module access.
                 </p>
               </div>
             </div>
@@ -843,9 +886,9 @@ export default function UsersPage() {
             <div className="portal-access-card">
               <div className="portal-access-header">
                 <div>
-                  <h3>Portal Access</h3>
+                  <h3>Module Access</h3>
                   <p>
-                    Select only those portals that this user should see after
+                    Select only those modules that this user should see after
                     login.
                   </p>
                 </div>
@@ -967,7 +1010,7 @@ export default function UsersPage() {
             <input
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
-              placeholder="Search by name, email, role, portal, department, or person type..."
+              placeholder="Search by name, email, role, module, department, or person type..."
             />
           </div>
 
@@ -988,7 +1031,7 @@ export default function UsersPage() {
               value={linkFilter}
               onChange={(event) => setLinkFilter(event.target.value)}
             >
-              <option value="">All Login Types</option>
+              <option value="">All User Links</option>
               <option value="linked">Linked To Person</option>
               <option value="unlinked">Without Person Link</option>
             </select>
@@ -1090,7 +1133,7 @@ export default function UsersPage() {
                             type="button"
                             className="access-button"
                             onClick={() => openAccessModal(item)}
-                            title="Edit portal access"
+                            title="Edit module access"
                           >
                             Access
                           </button>
@@ -1142,7 +1185,7 @@ export default function UsersPage() {
                       </div>
 
                       <div>
-                        <span>Portals</span>
+                        <span>Modules</span>
                         <strong>{portalAccess.length} Access</strong>
                       </div>
                     </div>
@@ -1205,9 +1248,9 @@ export default function UsersPage() {
                 <ShieldCheck size={25} />
               </div>
 
-              <h2>Update Portal Access</h2>
+              <h2>Update Module Access</h2>
               <p className="access-modal-subtitle">
-                Select which portals this user can see and use after login.
+                Select which modules this user can see and use after login.
               </p>
 
               <div className="confirm-user-card">
@@ -1240,8 +1283,8 @@ export default function UsersPage() {
 
               <div className="portal-access-header modal-portal-header">
                 <div>
-                  <h3>Allowed Portals</h3>
-                  <p>Only selected portals will be visible to this user.</p>
+                  <h3>Allowed Modules</h3>
+                  <p>Only selected modules will be visible to this user.</p>
                 </div>
 
                 <div className="portal-access-actions">

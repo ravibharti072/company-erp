@@ -23,7 +23,12 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/api";
 import { useAuth } from "../context/AuthContext";
 
-const FULL_ACCESS_ROLES = ["super-admin", "company-admin", "admin", "owner"];
+const FULL_ACCESS_ROLES = [
+  "super-admin",
+  "company-admin",
+  "admin",
+  "owner",
+];
 
 const ALL_PORTALS = [
   "dashboard",
@@ -46,6 +51,7 @@ const DEFAULT_PORTAL_ACCESS_BY_ROLE = {
   "company-admin": ALL_PORTALS,
   admin: ALL_PORTALS,
   owner: ALL_PORTALS,
+
   hr: [
     "people-onboarding",
     "users",
@@ -54,6 +60,7 @@ const DEFAULT_PORTAL_ACCESS_BY_ROLE = {
     "reports",
     "settings",
   ],
+
   manager: [
     "people-onboarding",
     "users",
@@ -68,9 +75,19 @@ const DEFAULT_PORTAL_ACCESS_BY_ROLE = {
     "reports",
     "settings",
   ],
-  accountant: ["attendance", "tasks", "reports", "settings"],
+
+  accountant: [
+    "attendance",
+    "tasks",
+    "receive-payment",
+    "reports",
+    "settings",
+  ],
+
   employee: ["attendance", "tasks", "settings"],
+
   intern: ["attendance", "tasks", "settings"],
+
   "sales-representative": [
     "attendance",
     "tasks",
@@ -81,8 +98,132 @@ const DEFAULT_PORTAL_ACCESS_BY_ROLE = {
     "maintenance",
     "settings",
   ],
+
   freelancer: ["attendance", "tasks", "settings"],
 };
+
+const MODULE_GROUPS = [
+  {
+    key: "daily-work",
+    title: "Daily Work",
+    moduleKeys: [
+      "sales",
+      "receive-payment",
+      "projects",
+      "tasks",
+    ],
+  },
+  {
+    key: "team-management",
+    title: "Team Management",
+    moduleKeys: [
+      "people-onboarding",
+      "users",
+      "attendance",
+    ],
+  },
+  {
+    key: "business-operations",
+    title: "Business Operations",
+    moduleKeys: [
+      "software-products",
+      "sales-commission",
+      "maintenance",
+    ],
+  },
+  {
+    key: "insights-control",
+    title: "Insights & Control",
+    moduleKeys: ["reports", "settings"],
+  },
+];
+
+const DASHBOARD_MODULES = [
+  {
+    key: "people-onboarding",
+    title: "People Onboarding",
+    path: "/people-onboarding",
+    icon: UsersRound,
+    colorClass: "module-blue",
+  },
+  {
+    key: "users",
+    title: "Software Users",
+    path: "/users",
+    icon: UserCheck,
+    colorClass: "module-cyan",
+  },
+  {
+    key: "attendance",
+    title: "Attendance",
+    path: "/attendance",
+    icon: CalendarCheck,
+    colorClass: "module-green",
+  },
+  {
+    key: "tasks",
+    title: "Tasks",
+    path: "/tasks",
+    icon: ClipboardList,
+    colorClass: "module-purple",
+  },
+  {
+    key: "sales",
+    title: "Sales",
+    path: "/sales",
+    icon: Target,
+    colorClass: "module-orange",
+  },
+  {
+    key: "software-products",
+    title: "Software Products",
+    path: "/software-products",
+    icon: PackageCheck,
+    colorClass: "module-cyan",
+  },
+  {
+    key: "receive-payment",
+    title: "Receive Payment",
+    path: "/receive-payment",
+    icon: WalletCards,
+    colorClass: "module-money",
+  },
+  {
+    key: "sales-commission",
+    title: "Sales Commission",
+    path: "/sales-commission",
+    icon: Percent,
+    colorClass: "module-violet",
+  },
+  {
+    key: "projects",
+    title: "Projects",
+    path: "/projects",
+    icon: BriefcaseBusiness,
+    colorClass: "module-teal",
+  },
+  {
+    key: "maintenance",
+    title: "Maintenance",
+    path: "/maintenance",
+    icon: Wrench,
+    colorClass: "module-maintenance",
+  },
+  {
+    key: "reports",
+    title: "Reports",
+    path: "/reports",
+    icon: BarChart3,
+    colorClass: "module-indigo",
+  },
+  {
+    key: "settings",
+    title: "Settings",
+    path: "/settings",
+    icon: Settings,
+    colorClass: "module-violet",
+  },
+];
 
 function normalizeRole(value) {
   return String(value || "")
@@ -123,19 +264,23 @@ function parsePortalAccess(value, role) {
           .filter((item) => ALL_PORTALS.includes(item));
       }
     } catch {
-      return DEFAULT_PORTAL_ACCESS_BY_ROLE[normalizedRole] || [
-        "attendance",
-        "tasks",
-        "settings",
-      ];
+      return (
+        DEFAULT_PORTAL_ACCESS_BY_ROLE[normalizedRole] || [
+          "attendance",
+          "tasks",
+          "settings",
+        ]
+      );
     }
   }
 
-  return DEFAULT_PORTAL_ACCESS_BY_ROLE[normalizedRole] || [
-    "attendance",
-    "tasks",
-    "settings",
-  ];
+  return (
+    DEFAULT_PORTAL_ACCESS_BY_ROLE[normalizedRole] || [
+      "attendance",
+      "tasks",
+      "settings",
+    ]
+  );
 }
 
 function canAccessPortal(user, portalKey) {
@@ -152,7 +297,10 @@ function canAccessPortal(user, portalKey) {
     return true;
   }
 
-  const portalAccess = parsePortalAccess(user?.portal_access, user?.role);
+  const portalAccess = parsePortalAccess(
+    user?.portal_access,
+    user?.role
+  );
 
   if (
     normalizedPortal === "receive-payment" ||
@@ -196,8 +344,12 @@ export default function DashboardPage() {
     const loadDashboardSummary = async () => {
       try {
         const response = await api.get("/dashboard/summary");
+
         const payload =
-          response?.data?.data || response?.data?.summary || response?.data || {};
+          response?.data?.data ||
+          response?.data?.summary ||
+          response?.data ||
+          {};
 
         if (isMounted) {
           setSummary(payload);
@@ -215,28 +367,25 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    if (!canUseSales) return;
+    if (!canUseSales) return undefined;
 
     let isMounted = true;
 
     const loadSalesDashboardData = async () => {
-      try {
-        const [crmResult, paymentResult] = await Promise.allSettled([
+      const [crmResult, paymentResult] =
+        await Promise.allSettled([
           api.get("/sales/summary"),
           api.get("/sales/payments/summary"),
         ]);
 
-        if (!isMounted) return;
+      if (!isMounted) return;
 
-        if (crmResult.status === "fulfilled") {
-          setCrmSummary(crmResult.value?.data || {});
-        }
+      if (crmResult.status === "fulfilled") {
+        setCrmSummary(crmResult.value?.data || {});
+      }
 
-        if (paymentResult.status === "fulfilled") {
-          setPaymentSummary(paymentResult.value?.data || {});
-        }
-      } catch (error) {
-        console.warn("Sales dashboard data not loaded:", error);
+      if (paymentResult.status === "fulfilled") {
+        setPaymentSummary(paymentResult.value?.data || {});
       }
     };
 
@@ -248,16 +397,19 @@ export default function DashboardPage() {
   }, [canUseSales]);
 
   useEffect(() => {
-    const timer = setInterval(() => {
+    const timer = window.setInterval(() => {
       setNow(new Date());
     }, 1000);
 
-    return () => clearInterval(timer);
+    return () => window.clearInterval(timer);
   }, []);
 
   const getValue = (keys, fallback = 0) => {
     for (const key of keys) {
-      if (summary?.[key] !== undefined && summary?.[key] !== null) {
+      if (
+        summary?.[key] !== undefined &&
+        summary?.[key] !== null
+      ) {
         return summary[key];
       }
     }
@@ -267,7 +419,10 @@ export default function DashboardPage() {
 
   const getCrmValue = (keys, fallback = 0) => {
     for (const key of keys) {
-      if (crmSummary?.[key] !== undefined && crmSummary?.[key] !== null) {
+      if (
+        crmSummary?.[key] !== undefined &&
+        crmSummary?.[key] !== null
+      ) {
         return crmSummary[key];
       }
     }
@@ -277,7 +432,10 @@ export default function DashboardPage() {
 
   const getPaymentValue = (keys, fallback = 0) => {
     for (const key of keys) {
-      if (paymentSummary?.[key] !== undefined && paymentSummary?.[key] !== null) {
+      if (
+        paymentSummary?.[key] !== undefined &&
+        paymentSummary?.[key] !== null
+      ) {
         return paymentSummary[key];
       }
     }
@@ -286,18 +444,15 @@ export default function DashboardPage() {
   };
 
   const formatNumber = (value) => {
-    const number = Number(value || 0);
-    return number.toLocaleString("en-IN");
+    return Number(value || 0).toLocaleString("en-IN");
   };
 
   const formatCurrency = (value) => {
-    const amount = Number(value || 0);
-
     return new Intl.NumberFormat("en-IN", {
       style: "currency",
       currency: "INR",
       maximumFractionDigits: 0,
-    }).format(amount);
+    }).format(Number(value || 0));
   };
 
   const dateText = useMemo(() => {
@@ -318,184 +473,167 @@ export default function DashboardPage() {
     });
   }, [now]);
 
-  const allOverviewCards = [
-    {
-      key: "tasks",
-      title: "Tasks Pending",
-      value: formatNumber(
-        getValue(["tasks_pending", "pending_tasks", "pendingTasks"], 0)
-      ),
-      subtitle: `In progress: ${formatNumber(
-        getValue(["tasks_in_progress", "in_progress_tasks", "inProgressTasks"], 0)
-      )}`,
-      icon: ClipboardList,
-      colorClass: "overview-purple",
-    },
-    {
-      key: "sales",
-      title: "Final Sales",
-      value: formatCurrency(
-        getValue(
-          ["final_sales", "total_final_sales", "sales_amount"],
-          getCrmValue(["final_sales"], 0)
-        )
-      ),
-      subtitle: `Converted: ${formatNumber(
-        getValue(
-          ["converted_sales", "sales_converted", "convertedSales"],
-          getCrmValue(["converted_leads"], 0)
-        )
-      )}`,
-      icon: Target,
-      colorClass: "overview-orange",
-    },
-    {
-      key: "receive-payment",
-      title: "Received Payment",
-      value: formatCurrency(
-        getPaymentValue(["total_received"], getValue(["total_received"], 0))
-      ),
-      subtitle: `Due: ${formatCurrency(
-        getPaymentValue(
-          ["total_pending_due_from_leads"],
-          getValue(["total_pending_due_from_leads", "pending_due"], 0)
-        )
-      )}`,
-      icon: IndianRupee,
-      colorClass: "overview-emerald",
-    },
-    {
-      key: "projects",
-      title: "Projects Running",
-      value: formatNumber(
-        getValue(
-          ["projects_running", "running_projects", "active_projects"],
-          getCrmValue(["ongoing_projects"], 0)
-        )
-      ),
-      subtitle: `Completed: ${formatNumber(
-        getValue(
-          ["completed_projects", "projects_completed"],
-          getCrmValue(["completed_projects"], 0)
-        )
-      )}`,
-      icon: BriefcaseBusiness,
-      colorClass: "overview-green",
-    },
-    {
-      key: "attendance",
-      title: "Team Overview",
-      value: formatNumber(
-        getValue(["team_overview", "team_members", "total_users", "users_count"], 0)
-      ),
-      subtitle: `Present today: ${formatNumber(
-        getValue(["present_today", "today_present", "presentToday"], 0)
-      )}`,
-      icon: Users,
-      colorClass: "overview-blue",
-    },
-  ];
-
-  const allDashboardModules = [
-    {
-      key: "people-onboarding",
-      title: "People Onboarding",
-      path: "/people-onboarding",
-      icon: UsersRound,
-      colorClass: "module-blue",
-    },
-    {
-      key: "users",
-      title: "Software Users",
-      path: "/users",
-      icon: UserCheck,
-      colorClass: "module-cyan",
-    },
-    {
-      key: "attendance",
-      title: "Attendance",
-      path: "/attendance",
-      icon: CalendarCheck,
-      colorClass: "module-green",
-    },
-    {
-      key: "tasks",
-      title: "Tasks",
-      path: "/tasks",
-      icon: ClipboardList,
-      colorClass: "module-purple",
-    },
-    {
-      key: "sales",
-      title: "Sales",
-      path: "/sales",
-      icon: Target,
-      colorClass: "module-orange",
-    },
-    {
-      key: "software-products",
-      title: "Software Products",
-      path: "/software-products",
-      icon: PackageCheck,
-      colorClass: "module-cyan",
-    },
-    {
-      key: "receive-payment",
-      title: "Receive Payment",
-      path: "/receive-payment",
-      icon: WalletCards,
-      colorClass: "module-money",
-    },
-    {
-      key: "sales-commission",
-      title: "Sales Commission",
-      path: "/sales-commission",
-      icon: Percent,
-      colorClass: "module-violet",
-    },
-    {
-      key: "projects",
-      title: "Projects",
-      path: "/projects",
-      icon: BriefcaseBusiness,
-      colorClass: "module-teal",
-    },
-    {
-      key: "maintenance",
-      title: "Maintenance",
-      path: "/maintenance",
-      icon: Wrench,
-      colorClass: "module-maintenance",
-    },
-    {
-      key: "reports",
-      title: "Reports",
-      path: "/reports",
-      icon: BarChart3,
-      colorClass: "module-indigo",
-    },
-    {
-      key: "settings",
-      title: "Settings",
-      path: "/settings",
-      icon: Settings,
-      colorClass: "module-violet",
-    },
-  ];
-
-  const dashboardModules = useMemo(() => {
-    return allDashboardModules.filter((module) =>
-      canAccessPortal(user, module.key)
-    );
-  }, [user]);
-
   const overviewCards = useMemo(() => {
+    const allOverviewCards = [
+      {
+        key: "tasks",
+        title: "Tasks Pending",
+        value: formatNumber(
+          getValue(
+            [
+              "tasks_pending",
+              "pending_tasks",
+              "pendingTasks",
+            ],
+            0
+          )
+        ),
+        subtitle: `In progress: ${formatNumber(
+          getValue(
+            [
+              "tasks_in_progress",
+              "in_progress_tasks",
+              "inProgressTasks",
+            ],
+            0
+          )
+        )}`,
+        icon: ClipboardList,
+        colorClass: "overview-purple",
+      },
+      {
+        key: "sales",
+        title: "Final Sales",
+        value: formatCurrency(
+          getValue(
+            [
+              "final_sales",
+              "total_final_sales",
+              "sales_amount",
+            ],
+            getCrmValue(["final_sales"], 0)
+          )
+        ),
+        subtitle: `Converted: ${formatNumber(
+          getValue(
+            [
+              "converted_sales",
+              "sales_converted",
+              "convertedSales",
+            ],
+            getCrmValue(["converted_leads"], 0)
+          )
+        )}`,
+        icon: Target,
+        colorClass: "overview-orange",
+      },
+      {
+        key: "receive-payment",
+        title: "Received Payment",
+        value: formatCurrency(
+          getPaymentValue(
+            ["total_received"],
+            getValue(["total_received"], 0)
+          )
+        ),
+        subtitle: `Due: ${formatCurrency(
+          getPaymentValue(
+            ["total_pending_due_from_leads"],
+            getValue(
+              [
+                "total_pending_due_from_leads",
+                "pending_due",
+              ],
+              0
+            )
+          )
+        )}`,
+        icon: IndianRupee,
+        colorClass: "overview-emerald",
+      },
+      {
+        key: "projects",
+        title: "Projects Running",
+        value: formatNumber(
+          getValue(
+            [
+              "projects_running",
+              "running_projects",
+              "active_projects",
+            ],
+            getCrmValue(["ongoing_projects"], 0)
+          )
+        ),
+        subtitle: `Completed: ${formatNumber(
+          getValue(
+            [
+              "completed_projects",
+              "projects_completed",
+            ],
+            getCrmValue(["completed_projects"], 0)
+          )
+        )}`,
+        icon: BriefcaseBusiness,
+        colorClass: "overview-green",
+      },
+      {
+        key: "attendance",
+        title: "Team Overview",
+        value: formatNumber(
+          getValue(
+            [
+              "team_overview",
+              "team_members",
+              "total_users",
+              "users_count",
+            ],
+            0
+          )
+        ),
+        subtitle: `Present today: ${formatNumber(
+          getValue(
+            [
+              "present_today",
+              "today_present",
+              "presentToday",
+            ],
+            0
+          )
+        )}`,
+        icon: Users,
+        colorClass: "overview-blue",
+      },
+    ];
+
     const filteredCards = allOverviewCards.filter((card) =>
       canAccessPortal(user, card.key)
     );
 
-    return filteredCards.length > 0 ? filteredCards : [allOverviewCards[0]];
+    return filteredCards.length > 0
+      ? filteredCards
+      : [allOverviewCards[0]];
   }, [user, summary, crmSummary, paymentSummary]);
+
+  const visibleModules = useMemo(() => {
+    return DASHBOARD_MODULES.filter((module) =>
+      canAccessPortal(user, module.key)
+    );
+  }, [user]);
+
+  const groupedModules = useMemo(() => {
+    const moduleMap = new Map();
+
+    visibleModules.forEach((module) => {
+      moduleMap.set(module.key, module);
+    });
+
+    return MODULE_GROUPS.map((group) => ({
+      ...group,
+      modules: group.moduleKeys
+        .map((moduleKey) => moduleMap.get(moduleKey))
+        .filter(Boolean),
+    })).filter((group) => group.modules.length > 0);
+  }, [visibleModules]);
 
   return (
     <>
@@ -510,10 +648,11 @@ export default function DashboardPage() {
 
             <div>
               <h1>Dashboard</h1>
+
               {!isAdminUser && (
                 <p>
-                  Your dashboard shows only the modules assigned to your software
-                  account.
+                  Your dashboard shows only the modules assigned to
+                  your account.
                 </p>
               )}
             </div>
@@ -521,6 +660,7 @@ export default function DashboardPage() {
 
           <div className="dashboard-clock-card">
             <Clock3 size={18} />
+
             <div>
               <span>{dateText}</span>
               <strong>{timeText}</strong>
@@ -532,20 +672,13 @@ export default function DashboardPage() {
           <div>
             <p className="welcome-kicker">WELCOME BACK</p>
             <h2>{displayName}</h2>
-
-            {!isAdminUser && (
-              <p>
-                Here is your workspace for today. Manage your assigned tasks,
-                update leads, receive payments, and track company work from one
-                place.
-              </p>
-            )}
           </div>
 
           <div className="login-card">
             <div className="login-avatar">
               {displayName.charAt(0).toUpperCase()}
             </div>
+
             <div>
               <span>Logged in as</span>
               <strong>{displayName}</strong>
@@ -559,11 +692,13 @@ export default function DashboardPage() {
 
             return (
               <article className="overview-card" key={card.title}>
-                <div className={`overview-icon ${card.colorClass}`}>
+                <div
+                  className={`overview-icon ${card.colorClass}`}
+                >
                   <Icon size={18} />
                 </div>
 
-                <div>
+                <div className="overview-content">
                   <p>{card.title}</p>
                   <strong>{card.value}</strong>
                   <span>{card.subtitle}</span>
@@ -573,53 +708,88 @@ export default function DashboardPage() {
           })}
         </section>
 
-        <section className="modules-section">
-          <div className="modules-section-header">
+        <section className="workspace-section">
+          <div className="workspace-header">
             <div>
-              <h2>{isAdminUser ? "Modules" : "Allowed Modules"}</h2>
-              {!isAdminUser && (
-                <p>Open any module assigned to your current account.</p>
-              )}
+              <span className="workspace-label">
+                WORKSPACE
+              </span>
+
+              <h2>
+                {isAdminUser
+                  ? "Company Modules"
+                  : "Your Modules"}
+              </h2>
             </div>
 
-            <span>
-              {dashboardModules.length}{" "}
-              {dashboardModules.length === 1 ? "module" : "modules"}
+            <span className="module-count-pill">
+              {visibleModules.length}{" "}
+              {visibleModules.length === 1
+                ? "module"
+                : "modules"}
             </span>
           </div>
 
-          {dashboardModules.length === 0 ? (
+          {groupedModules.length === 0 ? (
             <div className="empty-modules-card">
               <Settings size={32} />
+
               <h3>No modules assigned</h3>
+
               <p>
-                Please contact Company Admin to update your software access.
+                Please contact Company Admin to update your software
+                access.
               </p>
             </div>
           ) : (
-            <div className="modules-grid">
-              {dashboardModules.map((module) => {
-                const Icon = module.icon;
+            <div className="module-groups">
+              {groupedModules.map((group) => (
+                <section
+                  className="module-group"
+                  key={group.key}
+                >
+                  <div className="module-group-header">
+                    <h3>{group.title}</h3>
 
-                return (
-                  <button
-                    type="button"
-                    className="module-card"
-                    key={module.title}
-                    onClick={() => navigate(module.path)}
-                  >
-                    <div className={`module-icon ${module.colorClass}`}>
-                      <Icon size={18} />
-                    </div>
+                    <span>
+                      {group.modules.length}{" "}
+                      {group.modules.length === 1
+                        ? "module"
+                        : "modules"}
+                    </span>
+                  </div>
 
-                    <div className="module-text">
-                      <h3>{module.title}</h3>
-                    </div>
+                  <div className="group-modules-grid">
+                    {group.modules.map((module) => {
+                      const Icon = module.icon;
 
-                    <ArrowRight className="module-arrow" size={16} />
-                  </button>
-                );
-              })}
+                      return (
+                        <button
+                          type="button"
+                          className="module-card"
+                          key={module.key}
+                          onClick={() => navigate(module.path)}
+                        >
+                          <div
+                            className={`module-icon ${module.colorClass}`}
+                          >
+                            <Icon size={18} />
+                          </div>
+
+                          <div className="module-text">
+                            <h4>{module.title}</h4>
+                          </div>
+
+                          <ArrowRight
+                            className="module-arrow"
+                            size={16}
+                          />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
             </div>
           )}
         </section>
@@ -638,12 +808,12 @@ const dashboardStyles = `
 }
 
 .dashboard-header-card {
-  min-height: 86px;
   width: 100%;
+  min-height: 86px;
   padding: 17px 22px;
   border-radius: 20px;
   background: #ffffff;
-  border: 1px solid var(--erp-border);
+  border: 1px solid var(--erp-border, #e2e8f0);
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.045);
   display: flex;
   align-items: center;
@@ -652,6 +822,7 @@ const dashboardStyles = `
 }
 
 .dashboard-title-wrap {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -671,15 +842,15 @@ const dashboardStyles = `
 
 .dashboard-header-card h1 {
   margin: 0;
+  color: #06142b;
   font-size: 26px;
   line-height: 1.1;
-  color: #06142b;
 }
 
 .dashboard-header-card p {
   margin: 6px 0 0;
-  font-size: 13px;
   color: #334155;
+  font-size: 13px;
 }
 
 .dashboard-clock-card {
@@ -693,30 +864,40 @@ const dashboardStyles = `
   display: flex;
   align-items: center;
   gap: 11px;
+  flex-shrink: 0;
 }
 
 .dashboard-clock-card span {
   display: block;
-  font-size: 11px;
   color: #2563eb;
+  font-size: 11px;
 }
 
 .dashboard-clock-card strong {
   display: block;
   margin-top: 4px;
-  font-size: 17px;
   color: #06142b;
+  font-size: 17px;
   white-space: nowrap;
 }
 
 .welcome-card {
-  min-height: 92px;
   width: 100%;
+  min-height: 92px;
   padding: 19px 22px;
   border-radius: 20px;
   background:
-    radial-gradient(circle at right center, rgba(20, 184, 166, 0.14), transparent 28%),
-    linear-gradient(135deg, #f8fbff 0%, #eef6ff 58%, #ecfdf5 100%);
+    radial-gradient(
+      circle at right center,
+      rgba(20, 184, 166, 0.14),
+      transparent 28%
+    ),
+    linear-gradient(
+      135deg,
+      #f8fbff 0%,
+      #eef6ff 58%,
+      #ecfdf5 100%
+    );
   border: 1px solid #dbeafe;
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.04);
   display: flex;
@@ -729,6 +910,7 @@ const dashboardStyles = `
   margin: 0 0 5px;
   color: #2563eb;
   font-size: 12px;
+  font-weight: 800;
   letter-spacing: 0.09em;
 }
 
@@ -738,12 +920,6 @@ const dashboardStyles = `
   font-size: 26px;
   line-height: 1.1;
   letter-spacing: -0.04em;
-}
-
-.welcome-card p {
-  margin: 8px 0 0;
-  color: #334155;
-  font-size: 13px;
 }
 
 .login-card {
@@ -771,14 +947,14 @@ const dashboardStyles = `
 
 .login-card span {
   display: block;
-  font-size: 11px;
   color: #64748b;
+  font-size: 11px;
 }
 
 .login-card strong {
   display: block;
-  margin-top: 3px;
   max-width: 130px;
+  margin-top: 3px;
   color: #06142b;
   font-size: 13px;
   white-space: nowrap;
@@ -794,11 +970,12 @@ const dashboardStyles = `
 }
 
 .overview-card {
+  min-width: 0;
   min-height: 72px;
   padding: 13px 16px;
   border-radius: 17px;
   background: #ffffff;
-  border: 1px solid var(--erp-border);
+  border: 1px solid var(--erp-border, #e2e8f0);
   box-shadow: 0 10px 22px rgba(15, 23, 42, 0.04);
   display: flex;
   align-items: center;
@@ -824,19 +1001,19 @@ const dashboardStyles = `
   color: #ea580c;
 }
 
-.overview-green {
-  background: #e9fbf2;
-  color: #059669;
-}
-
+.overview-green,
 .overview-emerald {
-  background: #ecfdf5;
+  background: #e9fbf2;
   color: #059669;
 }
 
 .overview-blue {
   background: #eef6ff;
   color: #2563eb;
+}
+
+.overview-content {
+  min-width: 0;
 }
 
 .overview-card p {
@@ -851,58 +1028,118 @@ const dashboardStyles = `
   font-size: 20px;
   line-height: 1;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.overview-card div > span {
+.overview-card span {
   display: block;
   margin-top: 6px;
   color: #52677e;
   font-size: 11px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.modules-section {
+.workspace-section {
   width: 100%;
   border-radius: 20px;
   background: #ffffff;
-  border: 1px solid var(--erp-border);
+  border: 1px solid var(--erp-border, #e2e8f0);
   box-shadow: 0 16px 34px rgba(15, 23, 42, 0.05);
   overflow: hidden;
 }
 
-.modules-section-header {
+.workspace-header {
   min-height: 72px;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--erp-border-soft);
+  border-bottom: 1px solid var(--erp-border-soft, #eef2f7);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
 }
 
-.modules-section-header h2 {
+.workspace-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #2563eb;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
+
+.workspace-header h2 {
   margin: 0;
   color: #06142b;
   font-size: 21px;
 }
 
-.modules-section-header p {
-  margin: 7px 0 0;
-  color: #334155;
-  font-size: 13px;
-}
-
-.modules-section-header span {
-  padding: 7px 12px;
+.module-count-pill {
+  min-height: 31px;
+  padding: 0 11px;
   border-radius: 999px;
   background: #eef6ff;
+  border: 1px solid #dbeafe;
   color: #2563eb;
-  font-size: 12px;
+  font-size: 10px;
+  font-weight: 900;
+  display: inline-flex;
+  align-items: center;
   white-space: nowrap;
 }
 
-.modules-grid {
+.module-groups {
   padding: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.module-group {
+  padding: 14px;
+  border-radius: 17px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.module-group:first-child {
+  background: #f4f8ff;
+  border-color: #bfdbfe;
+}
+
+.module-group-header {
+  min-height: 32px;
+  margin-bottom: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.module-group-header h3 {
+  margin: 0;
+  color: #06142b;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.module-group-header span {
+  min-height: 27px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 850;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.group-modules-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 13px;
@@ -910,11 +1147,12 @@ const dashboardStyles = `
 
 .module-card {
   width: 100%;
+  min-width: 0;
   min-height: 78px;
   padding: 14px 13px;
   border-radius: 16px;
   background: #ffffff;
-  border: 1px solid var(--erp-border);
+  border: 1px solid var(--erp-border, #e2e8f0);
   display: flex;
   align-items: center;
   gap: 11px;
@@ -932,6 +1170,11 @@ const dashboardStyles = `
   transform: translateY(-2px);
   border-color: #bfdbfe;
   box-shadow: 0 14px 28px rgba(15, 23, 42, 0.08);
+}
+
+.module-card:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.16);
+  outline-offset: 2px;
 }
 
 .module-icon {
@@ -995,14 +1238,18 @@ const dashboardStyles = `
 
 .module-text {
   min-width: 0;
+  flex: 1;
   padding-right: 18px;
 }
 
-.module-text h3 {
+.module-text h4 {
   margin: 0;
   color: #06142b;
   font-size: 15px;
   font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .module-arrow {
@@ -1010,6 +1257,10 @@ const dashboardStyles = `
   top: 31px;
   right: 13px;
   color: #94a3b8;
+}
+
+.module-card:hover .module-arrow {
+  color: #2563eb;
 }
 
 .empty-modules-card {
@@ -1028,35 +1279,30 @@ const dashboardStyles = `
   margin: 0;
   color: #06142b;
   font-size: 18px;
-  font-weight: 800;
 }
 
 .empty-modules-card p {
   max-width: 420px;
   margin: 0;
   color: #52677e;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12px;
 }
 
-@media (max-width: 1700px) {
+@media (max-width: 1450px) {
   .overview-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-}
 
-@media (max-width: 1250px) {
-  .overview-grid,
-  .modules-grid {
+  .group-modules-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .dashboard-header-card,
   .welcome-card {
+    align-items: stretch;
     flex-direction: column;
-    align-items: flex-start;
   }
 
   .dashboard-clock-card,
@@ -1065,15 +1311,36 @@ const dashboardStyles = `
     min-width: 0;
   }
 
+  .overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workspace-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 620px) {
   .overview-grid,
-  .modules-grid {
+  .group-modules-grid {
     grid-template-columns: 1fr;
   }
 
-  .modules-section-header {
+  .module-group-header {
     align-items: flex-start;
-    flex-direction: column;
-    gap: 10px;
+  }
+
+  .dashboard-header-card h1 {
+    font-size: 22px;
+  }
+
+  .welcome-card h2 {
+    font-size: 21px;
+  }
+
+  .module-text h4 {
+    font-size: 14px;
   }
 }
 `;

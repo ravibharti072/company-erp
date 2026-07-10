@@ -11,6 +11,7 @@ import {
   Search,
   Trash2,
   X,
+  XCircle,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -95,11 +96,6 @@ const formatCurrency = (value) => {
   }).format(amount);
 };
 
-const getSoftwareProductPrice = (product) => {
-  if (!product) return 0;
-  return Number(product.base_price || 0) + Number(product.setup_charge || 0);
-};
-
 const getEmptyProjectForm = (sourceType = "own_company") => ({
   source_type: sourceType,
   lead_id: "",
@@ -147,6 +143,11 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const [notification, setNotification] = useState({
+    type: "",
+    message: "",
+  });
+
   const [activeView, setActiveView] = useState("");
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -163,6 +164,13 @@ export default function ProjectsPage() {
   const userRole = normalizeRole(user?.role);
   const isAdminUser = ADMIN_ROLES.includes(userRole);
   const canManageProjects = isAdminUser || userRole === "manager";
+
+  const showNotification = (type, message) => {
+    setNotification({
+      type,
+      message,
+    });
+  };
 
   const softwareProductMap = useMemo(() => {
     const map = new Map();
@@ -327,7 +335,10 @@ export default function ProjectsPage() {
       const response = await api.get("/sales/projects");
       setProjects(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
-      alert(error?.response?.data?.detail || "Failed to load projects");
+      showNotification(
+        "error",
+        error?.response?.data?.detail || "Failed to load projects"
+      );
     }
   };
 
@@ -362,6 +373,19 @@ export default function ProjectsPage() {
     fetchAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!notification.message) return;
+
+    const timer = window.setTimeout(() => {
+      setNotification({
+        type: "",
+        message: "",
+      });
+    }, 4500);
+
+    return () => window.clearTimeout(timer);
+  }, [notification.message]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -486,17 +510,17 @@ export default function ProjectsPage() {
     event.preventDefault();
 
     if (!canManageProjects) {
-      alert("You do not have permission to start projects");
+      showNotification("error", "You do not have permission to start projects");
       return;
     }
 
     if (projectForm.source_type === "converted_lead" && !projectForm.lead_id) {
-      alert("Select converted lead");
+      showNotification("error", "Select converted lead");
       return;
     }
 
     if (!projectForm.title.trim()) {
-      alert("Project title is required");
+      showNotification("error", "Project title is required");
       return;
     }
 
@@ -565,9 +589,12 @@ export default function ProjectsPage() {
       setActiveView("active");
       await fetchAll();
 
-      alert("Project started successfully");
+      showNotification("success", "Project started successfully");
     } catch (error) {
-      alert(error?.response?.data?.detail || "Failed to start project");
+      showNotification(
+        "error",
+        error?.response?.data?.detail || "Failed to start project"
+      );
     } finally {
       setSaving(false);
     }
@@ -581,8 +608,12 @@ export default function ProjectsPage() {
       });
 
       await fetchAll();
+      showNotification("success", "Project status updated successfully");
     } catch (error) {
-      alert(error?.response?.data?.detail || "Failed to update project status");
+      showNotification(
+        "error",
+        error?.response?.data?.detail || "Failed to update project status"
+      );
     }
   };
 
@@ -592,7 +623,7 @@ export default function ProjectsPage() {
     if (!selectedProject) return;
 
     if (!softwareForm.software_name.trim()) {
-      alert("Software name is required");
+      showNotification("error", "Software name is required");
       return;
     }
 
@@ -625,9 +656,10 @@ export default function ProjectsPage() {
       closeSoftwareModal();
       await fetchAll();
 
-      alert("Software product created successfully");
+      showNotification("success", "Software product created successfully");
     } catch (error) {
-      alert(
+      showNotification(
+        "error",
         error?.response?.data?.detail ||
           "Failed to convert project to software product"
       );
@@ -646,9 +678,12 @@ export default function ProjectsPage() {
     try {
       await api.delete(`/sales/projects/${projectId}`);
       await fetchAll();
-      alert("Project deleted successfully");
+      showNotification("success", "Project deleted successfully");
     } catch (error) {
-      alert(error?.response?.data?.detail || "Failed to delete project");
+      showNotification(
+        "error",
+        error?.response?.data?.detail || "Failed to delete project"
+      );
     }
   };
 
@@ -833,6 +868,31 @@ export default function ProjectsPage() {
             )}
           </div>
         </div>
+
+        {notification.message && (
+          <div
+            className={
+              notification.type === "success"
+                ? "page-notification success"
+                : "page-notification error"
+            }
+          >
+            {notification.type === "success" ? (
+              <CheckCircle2 size={18} />
+            ) : (
+              <XCircle size={18} />
+            )}
+
+            <span>{notification.message}</span>
+
+            <button
+              type="button"
+              onClick={() => setNotification({ type: "", message: "" })}
+            >
+              <X size={15} />
+            </button>
+          </div>
+        )}
 
         {!activeView && (
           <section className="pipeline-card">
@@ -1413,6 +1473,46 @@ const projectsPageStyles = `
   align-items: center;
   justify-content: space-between;
   gap: 18px;
+}
+
+.page-notification {
+  min-height: 52px;
+  padding: 13px 15px;
+  border-radius: 17px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.05);
+}
+
+.page-notification.success {
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
+  color: #059669;
+}
+
+.page-notification.error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+}
+
+.page-notification span {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.page-notification button {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.75);
+  color: inherit;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
 }
 
 .page-title-wrap {
