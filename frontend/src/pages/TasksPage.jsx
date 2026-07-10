@@ -7,12 +7,16 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardList,
+  Edit3,
+  Eye,
   Filter,
+  Lock,
   Plus,
   PlusCircle,
   Save,
   Search,
   Trash2,
+  UserRound,
   X,
   XCircle,
 } from "lucide-react";
@@ -21,31 +25,63 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/api";
 import { useAuth } from "../context/AuthContext";
 
-const TASK_MANAGER_ROLES = ["super-admin", "company-admin", "hr", "manager"];
+const TASK_MANAGER_ROLES = [
+  "super-admin",
+  "company-admin",
+  "admin",
+  "owner",
+  "hr",
+  "manager",
+  "team-lead",
+  "project-manager",
+];
+
+const ROLE_LEVELS = {
+  "super-admin": 100,
+  "company-admin": 90,
+  admin: 90,
+  owner: 90,
+  hr: 80,
+  manager: 70,
+  "team-lead": 65,
+  "project-manager": 65,
+  employee: 50,
+  "sales-representative": 50,
+  accountant: 50,
+  developer: 50,
+  designer: 50,
+  freelancer: 40,
+  intern: 10,
+};
 
 const TASK_STATUSES = ["pending", "in-progress", "completed"];
-
 const PRIORITIES = ["low", "medium", "high", "urgent"];
-
 const TASKS_PER_PAGE = 20;
+
+const normalizeRole = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("_", "-")
+    .replaceAll(" ", "-");
 
 const normalizeTaskStatus = (status) => {
   const value = String(status || "pending").trim().toLowerCase();
 
   if (value === "in_progress") return "in-progress";
-  if (value === "submitted") return "completed";
-  if (value === "done") return "completed";
-  if (value === "complete") return "completed";
+  if (["submitted", "done", "complete"].includes(value)) return "completed";
 
   return value;
 };
 
 const formatOptionLabel = (value) => {
-  if (!value) return "";
+  if (!value) return "-";
 
   return String(value)
     .replaceAll("_", " ")
-    .split("-")
+    .replaceAll("-", " ")
+    .split(" ")
+    .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 };
@@ -68,37 +104,28 @@ const getAllowedTaskStatuses = (currentStatus) => {
     ];
   }
 
-  if (status === "completed") {
-    return [{ value: "completed", label: "Completed" }];
-  }
-
-  return [
-    { value: "pending", label: "Pending" },
-    { value: "in-progress", label: "In Progress" },
-    { value: "completed", label: "Completed" },
-  ];
+  return [{ value: "completed", label: "Completed" }];
 };
 
 const canChangeTaskStatus = (oldStatus, newStatus) => {
-  const statusOrder = {
+  const order = {
     pending: 1,
     "in-progress": 2,
     completed: 3,
   };
 
-  const oldValue = normalizeTaskStatus(oldStatus);
-  const newValue = normalizeTaskStatus(newStatus);
-
-  return statusOrder[newValue] >= statusOrder[oldValue];
+  return (
+    order[normalizeTaskStatus(newStatus)] >=
+    order[normalizeTaskStatus(oldStatus)]
+  );
 };
 
 const extractProjectLine = (value) => {
   if (!value) return "";
 
-  const lines = String(value).split("\n");
-  const projectLine = lines.find((line) =>
-    line.trim().toLowerCase().startsWith("project:")
-  );
+  const projectLine = String(value)
+    .split("\n")
+    .find((line) => line.trim().toLowerCase().startsWith("project:"));
 
   return projectLine ? projectLine.replace(/^project:/i, "").trim() : "";
 };
@@ -116,9 +143,7 @@ const removeProjectLine = (value) => {
 const getErrorMessage = (error, fallback) => {
   const detail = error?.response?.data?.detail;
 
-  if (typeof detail === "string") {
-    return detail;
-  }
+  if (typeof detail === "string") return detail;
 
   if (Array.isArray(detail)) {
     return detail
@@ -126,12 +151,30 @@ const getErrorMessage = (error, fallback) => {
       .join(", ");
   }
 
-  if (error?.response?.data?.message) {
-    return error.response.data.message;
-  }
-
-  return fallback;
+  return error?.response?.data?.message || fallback;
 };
+
+const getEmptyTaskForm = () => ({
+  project_id: "",
+  assigned_to_user_id: "",
+  title: "",
+  description: "",
+  priority: "medium",
+  due_date: "",
+  remarks: "",
+});
+
+const getEmptyEditForm = () => ({
+  project_id: "",
+  assigned_to_user_id: "",
+  title: "",
+  description: "",
+  priority: "medium",
+  due_date: "",
+  remarks: "",
+  status: "pending",
+  submission_note: "",
+});
 
 export default function TasksPage() {
   const navigate = useNavigate();
@@ -143,6 +186,7 @@ export default function TasksPage() {
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [detailsSaving, setDetailsSaving] = useState(false);
 
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [taskView, setTaskView] = useState("ongoing");
@@ -150,6 +194,10 @@ export default function TasksPage() {
   const [priorityFilter, setPriorityFilter] = useState("");
   const [searchText, setSearchText] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+
+  const [selectedTask, setSelectedTask] = useState(null);
+  const [detailsMode, setDetailsMode] = useState("view");
+  const [editForm, setEditForm] = useState(getEmptyEditForm());
 
   const [notification, setNotification] = useState({
     type: "",
@@ -162,61 +210,80 @@ export default function TasksPage() {
     loading: false,
   });
 
-  const [formData, setFormData] = useState({
-    project_id: "",
-    assigned_to_user_id: "",
-    title: "",
-    description: "",
-    priority: "medium",
-    due_date: "",
-    remarks: "",
-  });
-
+  const [formData, setFormData] = useState(getEmptyTaskForm());
   const [submissionNotes, setSubmissionNotes] = useState({});
 
-  const isTaskManager = TASK_MANAGER_ROLES.includes(user?.role);
+  const currentRole = normalizeRole(user?.role);
+  const isTaskManager = TASK_MANAGER_ROLES.includes(currentRole);
+  const isIntern = currentRole === "intern";
+  const canCreateTask = isTaskManager || isIntern;
 
   const showNotification = (type, message) => {
-    setNotification({
-      type,
-      message,
-    });
+    setNotification({ type, message });
   };
 
   useEffect(() => {
-    if (!notification.message) return;
+    if (!notification.message) return undefined;
 
     const timer = window.setTimeout(() => {
-      setNotification({
-        type: "",
-        message: "",
-      });
+      setNotification({ type: "", message: "" });
     }, 4500);
 
     return () => window.clearTimeout(timer);
   }, [notification.message]);
 
+  useEffect(() => {
+    if (!selectedTask && !showCreateForm && !deleteModal.open) return undefined;
+
+    const oldOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    const handleEscape = (event) => {
+      if (event.key !== "Escape") return;
+      if (detailsSaving || saving || deleteModal.loading) return;
+
+      if (deleteModal.open) {
+        setDeleteModal({ open: false, task: null, loading: false });
+      } else if (selectedTask) {
+        setSelectedTask(null);
+        setDetailsMode("view");
+      } else if (showCreateForm) {
+        setShowCreateForm(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleEscape);
+
+    return () => {
+      document.body.style.overflow = oldOverflow;
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [
+    selectedTask,
+    showCreateForm,
+    deleteModal.open,
+    deleteModal.loading,
+    detailsSaving,
+    saving,
+  ]);
+
   const usersMap = useMemo(() => {
     const map = new Map();
-
-    users.forEach((item) => {
-      map.set(item.id, item);
-    });
-
+    users.forEach((item) => map.set(Number(item.id), item));
     return map;
   }, [users]);
 
   const projectsMap = useMemo(() => {
     const map = new Map();
-
-    projects.forEach((item) => {
-      map.set(Number(item.id), item);
-    });
-
+    projects.forEach((item) => map.set(Number(item.id), item));
     return map;
   }, [projects]);
 
   const assignableUsers = useMemo(() => {
+    if (isIntern) {
+      return user ? [user] : [];
+    }
+
     return users.filter((item) =>
       [
         "employee",
@@ -226,9 +293,9 @@ export default function TasksPage() {
         "manager",
         "hr",
         "company-admin",
-      ].includes(item.role)
+      ].includes(normalizeRole(item.role))
     );
-  }, [users]);
+  }, [users, isIntern, user]);
 
   const activeProjects = useMemo(() => {
     return projects.filter((project) => {
@@ -264,33 +331,104 @@ export default function TasksPage() {
   }, [tasks]);
 
   const statusFilterOptions = useMemo(() => {
-    if (taskView === "completed") {
-      return ["completed"];
-    }
-
-    return TASK_STATUSES.filter((status) => status !== "completed");
+    return taskView === "completed"
+      ? ["completed"]
+      : TASK_STATUSES.filter((status) => status !== "completed");
   }, [taskView]);
 
   const getProjectName = (task) => {
-    if (task.project_title) return task.project_title;
-    if (task.project?.title) return task.project.title;
+    if (task?.project_title) return task.project_title;
+    if (task?.project?.title) return task.project.title;
 
-    if (task.project_id) {
+    if (task?.project_id) {
       const project = projectsMap.get(Number(task.project_id));
       if (project) return project.title;
     }
 
-    const fromRemarks = extractProjectLine(task.remarks);
-    if (fromRemarks) return fromRemarks;
+    return extractProjectLine(task?.remarks) || "-";
+  };
 
-    return "-";
+  const getUserName = (userId) => {
+    const foundUser = usersMap.get(Number(userId));
+
+    if (!foundUser) {
+      if (Number(userId) === Number(user?.id)) {
+        return user?.full_name || user?.name || user?.email || `User #${userId}`;
+      }
+
+      return userId ? `User #${userId}` : "-";
+    }
+
+    return foundUser.full_name || foundUser.person?.full_name || foundUser.email;
+  };
+
+  const getUserSubtitle = (userId) => {
+    const foundUser = usersMap.get(Number(userId));
+
+    if (!foundUser) {
+      if (Number(userId) === Number(user?.id)) {
+        const role = formatOptionLabel(user?.role || "user");
+        const department = user?.department;
+        return `${role}${department ? ` • ${department}` : ""}`;
+      }
+
+      return "-";
+    }
+
+    const role = formatOptionLabel(foundUser.role || "user");
+    const department = foundUser.department || foundUser.person?.department;
+
+    return `${role}${department ? ` • ${department}` : ""}`;
+  };
+
+  const getCreator = (task) => usersMap.get(Number(task?.assigned_by_user_id));
+
+  const getCreatorRole = (task) => {
+    const creator = getCreator(task);
+
+    return normalizeRole(
+      creator?.role ||
+        task?.assigned_by_role ||
+        task?.creator_role ||
+        (Number(task?.assigned_by_user_id) === Number(user?.id)
+          ? user?.role
+          : "")
+    );
+  };
+
+  const canFullyEditTask = (task) => {
+    if (!task || !isTaskManager) return false;
+    if (currentRole === "super-admin") return true;
+
+    if (Number(task.assigned_by_user_id) === Number(user?.id)) {
+      return true;
+    }
+
+    const creatorRole = getCreatorRole(task);
+
+    if (!creatorRole) {
+      return ["company-admin", "admin", "owner"].includes(currentRole);
+    }
+
+    return (
+      (ROLE_LEVELS[currentRole] || 20) >=
+      (ROLE_LEVELS[creatorRole] || 20)
+    );
+  };
+
+  const canDeleteTask = (task) => canFullyEditTask(task);
+
+  const canUpdateProgress = (task) => {
+    if (!task) return false;
+    if (isTaskManager) return true;
+
+    return Number(task.assigned_to_user_id) === Number(user?.id);
   };
 
   const filteredTasks = useMemo(() => {
     const search = searchText.trim().toLowerCase();
 
     return tasks.filter((task) => {
-      const assignedUser = usersMap.get(task.assigned_to_user_id);
       const currentStatus = normalizeTaskStatus(task.status);
       const projectName = getProjectName(task);
 
@@ -308,33 +446,28 @@ export default function TasksPage() {
         task.submission_note,
         task.due_date,
         projectName,
-        assignedUser?.full_name,
-        assignedUser?.person?.full_name,
-        assignedUser?.email,
-        assignedUser?.role,
-        assignedUser?.department,
-        assignedUser?.person?.department,
+        getUserName(task.assigned_to_user_id),
+        getUserName(task.assigned_by_user_id),
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
 
-      const searchMatch = search ? searchTarget.includes(search) : true;
-      const statusMatch = statusFilter ? currentStatus === statusFilter : true;
-      const priorityMatch = priorityFilter
-        ? task.priority === priorityFilter
-        : true;
-
-      return viewMatch && searchMatch && statusMatch && priorityMatch;
+      return (
+        viewMatch &&
+        (!search || searchTarget.includes(search)) &&
+        (!statusFilter || currentStatus === statusFilter) &&
+        (!priorityFilter || task.priority === priorityFilter)
+      );
     });
   }, [
     tasks,
-    usersMap,
-    projectsMap,
     searchText,
     statusFilter,
     priorityFilter,
     taskView,
+    usersMap,
+    projectsMap,
   ]);
 
   const totalPages = Math.max(
@@ -354,19 +487,21 @@ export default function TasksPage() {
   const pageEnd = Math.min(currentPage * TASKS_PER_PAGE, filteredTasks.length);
 
   const fetchUsers = async () => {
-    if (!isTaskManager) return;
-
     try {
       const response = await api.get("/users");
       setUsers(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
-      console.error("Users loading error:", error);
+      if (isTaskManager) {
+        console.error("Users loading error:", error);
+      }
+
+      if (user) {
+        setUsers([user]);
+      }
     }
   };
 
   const fetchProjects = async () => {
-    if (!isTaskManager) return;
-
     try {
       const response = await api.get("/sales/projects");
       setProjects(Array.isArray(response.data) ? response.data : []);
@@ -381,13 +516,25 @@ export default function TasksPage() {
       setLoading(true);
 
       const response = await api.get("/tasks");
+      const taskList = Array.isArray(response.data) ? response.data : [];
 
-      setTasks(Array.isArray(response.data) ? response.data : []);
+      setTasks(taskList);
+
+      if (selectedTask) {
+        const refreshedTask = taskList.find(
+          (item) => Number(item.id) === Number(selectedTask.id)
+        );
+
+        if (refreshedTask) {
+          setSelectedTask(refreshedTask);
+          fillEditForm(refreshedTask);
+        } else {
+          setSelectedTask(null);
+          setDetailsMode("view");
+        }
+      }
     } catch (error) {
-      showNotification(
-        "error",
-        getErrorMessage(error, "Failed to load tasks")
-      );
+      showNotification("error", getErrorMessage(error, "Failed to load tasks"));
     } finally {
       setLoading(false);
     }
@@ -409,27 +556,66 @@ export default function TasksPage() {
   const updateField = (event) => {
     const { name, value } = event.target;
 
-    setFormData((prev) => ({
-      ...prev,
+    setFormData((previous) => ({
+      ...previous,
       [name]: value,
     }));
   };
 
-  const resetForm = () => {
-    setFormData({
-      project_id: "",
-      assigned_to_user_id: "",
-      title: "",
-      description: "",
-      priority: "medium",
-      due_date: "",
-      remarks: "",
+  const updateEditField = (event) => {
+    const { name, value } = event.target;
+
+    setEditForm((previous) => ({
+      ...previous,
+      [name]: value,
+    }));
+  };
+
+  const fillEditForm = (task) => {
+    setEditForm({
+      project_id: task.project_id ? String(task.project_id) : "",
+      assigned_to_user_id: task.assigned_to_user_id
+        ? String(task.assigned_to_user_id)
+        : "",
+      title: task.title || "",
+      description: task.description || "",
+      priority: task.priority || "medium",
+      due_date: task.due_date || "",
+      remarks: removeProjectLine(task.remarks) || "",
+      status: normalizeTaskStatus(task.status),
+      submission_note: task.submission_note || "",
     });
   };
 
+  const resetForm = () => setFormData(getEmptyTaskForm());
+
+  const openCreateModal = () => {
+    setFormData({
+      ...getEmptyTaskForm(),
+      assigned_to_user_id: isIntern ? String(user?.id || "") : "",
+    });
+
+    setShowCreateForm(true);
+  };
+
   const closeCreateModal = () => {
+    if (saving) return;
     resetForm();
     setShowCreateForm(false);
+  };
+
+  const openTaskDetails = (task) => {
+    setSelectedTask(task);
+    setDetailsMode("view");
+    fillEditForm(task);
+  };
+
+  const closeTaskDetails = () => {
+    if (detailsSaving) return;
+
+    setSelectedTask(null);
+    setDetailsMode("view");
+    setEditForm(getEmptyEditForm());
   };
 
   const changeTaskView = (nextView) => {
@@ -447,16 +633,18 @@ export default function TasksPage() {
   const handleCreateTask = async (event) => {
     event.preventDefault();
 
-    if (!isTaskManager) {
-      showNotification("error", "Only admin/HR/manager can create tasks.");
+    if (!canCreateTask) {
+      showNotification("error", "You do not have permission to create tasks.");
+      return;
+    }
+
+    if (isIntern && Number(formData.assigned_to_user_id) !== Number(user?.id)) {
+      showNotification("error", "Interns can only create tasks for themselves.");
       return;
     }
 
     if (!formData.project_id) {
-      showNotification(
-        "error",
-        "Please select project. Project is mandatory for every task."
-      );
+      showNotification("error", "Please select project.");
       return;
     }
 
@@ -488,8 +676,6 @@ export default function TasksPage() {
           : ""
       }`;
 
-      const cleanedRemarks = formData.remarks.trim();
-
       const payload = {
         project_id: Number(formData.project_id),
         project_title: selectedProject.title,
@@ -498,22 +684,20 @@ export default function TasksPage() {
         description: formData.description.trim() || null,
         priority: formData.priority,
         due_date: formData.due_date || null,
-        remarks: [projectContext, cleanedRemarks].filter(Boolean).join("\n"),
+        remarks: [projectContext, formData.remarks.trim()]
+          .filter(Boolean)
+          .join("\n"),
       };
 
       await api.post("/tasks", payload);
 
-      resetForm();
-      setShowCreateForm(false);
+      closeCreateModal();
       setTaskView("ongoing");
       await fetchTasks();
 
       showNotification("success", "Task created successfully.");
     } catch (error) {
-      showNotification(
-        "error",
-        getErrorMessage(error, "Failed to create task")
-      );
+      showNotification("error", getErrorMessage(error, "Failed to create task"));
     } finally {
       setSaving(false);
     }
@@ -523,6 +707,11 @@ export default function TasksPage() {
     const currentStatus = normalizeTaskStatus(task.status);
     const nextStatus = normalizeTaskStatus(newStatus);
 
+    if (!canUpdateProgress(task)) {
+      showNotification("error", "You cannot update this task.");
+      return;
+    }
+
     if (!canChangeTaskStatus(currentStatus, nextStatus)) {
       showNotification(
         "error",
@@ -530,37 +719,28 @@ export default function TasksPage() {
           currentStatus
         )} to ${formatOptionLabel(nextStatus)}.`
       );
-
-      await fetchTasks();
       return;
     }
 
     try {
-      const payload = {
-        status: nextStatus,
-      };
-
+      const payload = { status: nextStatus };
       const note = submissionNotes[task.id];
 
-      if (note && note.trim()) {
+      if (note?.trim()) {
         payload.submission_note = note.trim();
       }
 
       await api.put(`/tasks/${task.id}`, payload);
 
-      setSubmissionNotes((prev) => ({
-        ...prev,
+      setSubmissionNotes((previous) => ({
+        ...previous,
         [task.id]: "",
       }));
 
       await fetchTasks();
-
       showNotification("success", "Task updated successfully.");
     } catch (error) {
-      showNotification(
-        "error",
-        getErrorMessage(error, "Failed to update task")
-      );
+      showNotification("error", getErrorMessage(error, "Failed to update task"));
       await fetchTasks();
     }
   };
@@ -569,7 +749,89 @@ export default function TasksPage() {
     await handleStatusUpdate(task, normalizeTaskStatus(task.status));
   };
 
+  const handleSaveTaskDetails = async () => {
+    if (!selectedTask) return;
+
+    const fullEditAllowed = canFullyEditTask(selectedTask);
+    const progressAllowed = canUpdateProgress(selectedTask);
+
+    if (!fullEditAllowed && !progressAllowed) {
+      showNotification("error", "You cannot update this task.");
+      return;
+    }
+
+    const nextStatus = normalizeTaskStatus(editForm.status);
+    const currentStatus = normalizeTaskStatus(selectedTask.status);
+
+    if (!canChangeTaskStatus(currentStatus, nextStatus)) {
+      showNotification("error", "Completed task status cannot be reverted.");
+      return;
+    }
+
+    try {
+      setDetailsSaving(true);
+
+      let payload;
+
+      if (fullEditAllowed) {
+        const selectedProject = projectsMap.get(Number(editForm.project_id));
+        const projectContext = selectedProject
+          ? `Project: ${selectedProject.title}${
+              selectedProject.client_company_name
+                ? ` | Company: ${selectedProject.client_company_name}`
+                : ""
+            }${
+              selectedProject.project_type
+                ? ` | Type: ${formatOptionLabel(selectedProject.project_type)}`
+                : ""
+            }`
+          : extractProjectLine(selectedTask.remarks);
+
+        payload = {
+          project_id: editForm.project_id ? Number(editForm.project_id) : null,
+          project_title: selectedProject?.title || getProjectName(selectedTask),
+          assigned_to_user_id: Number(editForm.assigned_to_user_id),
+          title: editForm.title.trim(),
+          description: editForm.description.trim() || null,
+          priority: editForm.priority,
+          due_date: editForm.due_date || null,
+          remarks: [projectContext, editForm.remarks.trim()]
+            .filter(Boolean)
+            .join("\n"),
+          status: nextStatus,
+          submission_note: editForm.submission_note.trim() || null,
+        };
+      } else {
+        payload = {
+          status: nextStatus,
+          submission_note: editForm.submission_note.trim() || null,
+        };
+      }
+
+      await api.put(`/tasks/${selectedTask.id}`, payload);
+      await fetchTasks();
+
+      setDetailsMode("view");
+      showNotification("success", "Task details updated successfully.");
+    } catch (error) {
+      showNotification(
+        "error",
+        getErrorMessage(error, "Failed to update task details")
+      );
+    } finally {
+      setDetailsSaving(false);
+    }
+  };
+
   const openDeleteModal = (task) => {
+    if (!canDeleteTask(task)) {
+      showNotification(
+        "error",
+        "You cannot delete a task created by a higher-role user."
+      );
+      return;
+    }
+
     setDeleteModal({
       open: true,
       task,
@@ -591,13 +853,18 @@ export default function TasksPage() {
     if (!deleteModal.task?.id) return;
 
     try {
-      setDeleteModal((prev) => ({
-        ...prev,
+      setDeleteModal((previous) => ({
+        ...previous,
         loading: true,
       }));
 
       await api.delete(`/tasks/${deleteModal.task.id}`);
       await fetchTasks();
+
+      if (Number(selectedTask?.id) === Number(deleteModal.task.id)) {
+        setSelectedTask(null);
+        setDetailsMode("view");
+      }
 
       setDeleteModal({
         open: false,
@@ -607,35 +874,13 @@ export default function TasksPage() {
 
       showNotification("success", "Task deleted successfully.");
     } catch (error) {
-      setDeleteModal((prev) => ({
-        ...prev,
+      setDeleteModal((previous) => ({
+        ...previous,
         loading: false,
       }));
 
-      showNotification(
-        "error",
-        getErrorMessage(error, "Failed to delete task")
-      );
+      showNotification("error", getErrorMessage(error, "Failed to delete task"));
     }
-  };
-
-  const getUserName = (userId) => {
-    const foundUser = usersMap.get(userId);
-
-    if (!foundUser) return `User ID: ${userId}`;
-
-    return foundUser.full_name || foundUser.person?.full_name || foundUser.email;
-  };
-
-  const getUserSubtitle = (userId) => {
-    const foundUser = usersMap.get(userId);
-
-    if (!foundUser) return "-";
-
-    const role = foundUser.role ? formatOptionLabel(foundUser.role) : "User";
-    const department = foundUser.department || foundUser.person?.department;
-
-    return `${role}${department ? ` • ${department}` : ""}`;
   };
 
   const getTaskNote = (task) => {
@@ -648,20 +893,12 @@ export default function TasksPage() {
     return remarksWithoutProject || task.submission_note || "";
   };
 
-  const getTaskNoteLabel = (task) => {
-    if (taskView === "completed" && task.submission_note) {
-      return "Submission";
-    }
-
-    return "Note";
-  };
-
   const goToPreviousPage = () => {
-    setCurrentPage((prev) => Math.max(1, prev - 1));
+    setCurrentPage((previous) => Math.max(1, previous - 1));
   };
 
   const goToNextPage = () => {
-    setCurrentPage((prev) => Math.min(totalPages, prev + 1));
+    setCurrentPage((previous) => Math.min(totalPages, previous + 1));
   };
 
   return (
@@ -685,15 +922,15 @@ export default function TasksPage() {
 
             <div>
               <h1>Task Assignment</h1>
-              <p>Assign work and track progress for your team.</p>
+              <p>Open any task to view full details, progress and permissions.</p>
             </div>
           </div>
 
-          {isTaskManager && (
+          {canCreateTask && (
             <button
               type="button"
               className="create-task-button"
-              onClick={() => setShowCreateForm(true)}
+              onClick={openCreateModal}
             >
               <Plus size={17} />
               Create Task
@@ -703,11 +940,9 @@ export default function TasksPage() {
 
         {notification.message && (
           <div
-            className={
-              notification.type === "success"
-                ? "page-notification success"
-                : "page-notification error"
-            }
+            className={`page-notification ${
+              notification.type === "success" ? "success" : "error"
+            }`}
           >
             {notification.type === "success" ? (
               <CheckCircle2 size={18} />
@@ -763,11 +998,7 @@ export default function TasksPage() {
         <section className="task-view-tabs-card">
           <button
             type="button"
-            className={
-              taskView === "ongoing"
-                ? "task-view-tab active"
-                : "task-view-tab"
-            }
+            className={`task-view-tab ${taskView === "ongoing" ? "active" : ""}`}
             onClick={() => changeTaskView("ongoing")}
           >
             <span>Ongoing</span>
@@ -776,172 +1007,15 @@ export default function TasksPage() {
 
           <button
             type="button"
-            className={
-              taskView === "completed"
-                ? "task-view-tab active completed"
-                : "task-view-tab"
-            }
+            className={`task-view-tab ${
+              taskView === "completed" ? "active completed" : ""
+            }`}
             onClick={() => changeTaskView("completed")}
           >
             <span>Completed</span>
             <strong>{summary.completed}</strong>
           </button>
         </section>
-
-        {isTaskManager && showCreateForm && (
-          <div
-            className="task-modal-backdrop"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) {
-                closeCreateModal();
-              }
-            }}
-          >
-            <form className="task-modal-card" onSubmit={handleCreateTask}>
-              <div className="modal-header">
-                <div className="card-title-row modal-title-row">
-                  <div className="card-title-icon">
-                    <PlusCircle size={19} />
-                  </div>
-
-                  <div>
-                    <h2>Create Task</h2>
-                    <p>Select a project first, then assign work to a software user.</p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  className="modal-close-button"
-                  onClick={closeCreateModal}
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              <div className="form-content-grid">
-                <div className="form-group project-group">
-                  <label>
-                    Project <span>*</span>
-                  </label>
-                  <select
-                    name="project_id"
-                    value={formData.project_id}
-                    onChange={updateField}
-                    required
-                  >
-                    <option value="">Select project</option>
-                    {activeProjects.map((project) => (
-                      <option key={project.id} value={project.id}>
-                        {project.title}
-                        {project.client_company_name
-                          ? ` — ${project.client_company_name}`
-                          : ""}
-                        {project.project_type
-                          ? ` (${formatOptionLabel(project.project_type)})`
-                          : ""}
-                      </option>
-                    ))}
-                  </select>
-
-                  {activeProjects.length === 0 && (
-                    <small className="helper-text">
-                      No active project found. Create a CRM project first.
-                    </small>
-                  )}
-                </div>
-
-                <div className="form-group">
-                  <label>Assign To</label>
-                  <select
-                    name="assigned_to_user_id"
-                    value={formData.assigned_to_user_id}
-                    onChange={updateField}
-                    required
-                  >
-                    <option value="">Select user</option>
-                    {assignableUsers.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.full_name || item.person?.full_name || item.email} —{" "}
-                        {formatOptionLabel(item.role)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Task Title</label>
-                  <input
-                    name="title"
-                    value={formData.title}
-                    onChange={updateField}
-                    placeholder="Enter task title"
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Priority</label>
-                  <select
-                    name="priority"
-                    value={formData.priority}
-                    onChange={updateField}
-                  >
-                    {PRIORITIES.map((priority) => (
-                      <option key={priority} value={priority}>
-                        {formatOptionLabel(priority)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Due Date</label>
-                  <input
-                    name="due_date"
-                    type="date"
-                    value={formData.due_date}
-                    onChange={updateField}
-                  />
-                </div>
-
-                <div className="form-group description-group">
-                  <label>Description</label>
-                  <textarea
-                    name="description"
-                    value={formData.description}
-                    onChange={updateField}
-                    placeholder="Task details"
-                  />
-                </div>
-
-                <div className="form-group description-group">
-                  <label>Remarks</label>
-                  <textarea
-                    name="remarks"
-                    value={formData.remarks}
-                    onChange={updateField}
-                    placeholder="Admin remarks"
-                  />
-                </div>
-              </div>
-
-              <div className="form-actions-row">
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={closeCreateModal}
-                >
-                  Cancel
-                </button>
-
-                <button type="submit" className="primary-button" disabled={saving}>
-                  {saving ? "Creating..." : "Create Task"}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
 
         <section className="tasks-toolbar-card">
           <div className="search-box">
@@ -959,9 +1033,9 @@ export default function TasksPage() {
               onChange={(event) => setStatusFilter(event.target.value)}
             >
               <option value="">All Status</option>
-              {statusFilterOptions.map((status) => (
-                <option key={status} value={status}>
-                  {formatOptionLabel(status)}
+              {statusFilterOptions.map((taskStatus) => (
+                <option key={taskStatus} value={taskStatus}>
+                  {formatOptionLabel(taskStatus)}
                 </option>
               ))}
             </select>
@@ -1014,11 +1088,13 @@ export default function TasksPage() {
                 const currentStatus = normalizeTaskStatus(task.status);
                 const allowedStatuses = getAllowedTaskStatuses(currentStatus);
                 const taskNote = getTaskNote(task);
-                const taskNoteLabel = getTaskNoteLabel(task);
-                const taskProjectName = getProjectName(task);
 
                 return (
-                  <article className="task-card" key={task.id}>
+                  <article
+                    className="task-card"
+                    key={task.id}
+                    onClick={() => openTaskDetails(task)}
+                  >
                     <div className="task-card-header">
                       <div className="task-title-wrap">
                         <h3>{task.title}</h3>
@@ -1032,7 +1108,7 @@ export default function TasksPage() {
 
                     <div className="task-project-row">
                       <span>Project</span>
-                      <strong>{taskProjectName}</strong>
+                      <strong>{getProjectName(task)}</strong>
                     </div>
 
                     <div className="task-info-row">
@@ -1054,74 +1130,84 @@ export default function TasksPage() {
                     </div>
 
                     <div className={taskNote ? "task-note" : "task-note empty-note"}>
-                      {taskNote ? (
-                        <p>
-                          <strong>{taskNoteLabel}:</strong> {taskNote}
-                        </p>
-                      ) : (
-                        <p>No note added</p>
-                      )}
+                      <p>{taskNote || "No note added"}</p>
                     </div>
 
                     {currentStatus === "completed" ? (
                       <div className="task-footer-row">
                         <span className="completed-pill">Completed</span>
 
-                        {isTaskManager && (
+                        <button
+                          type="button"
+                          className="view-task-button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openTaskDetails(task);
+                          }}
+                        >
+                          <Eye size={15} />
+                        </button>
+
+                        {canDeleteTask(task) && (
                           <button
                             type="button"
                             className="icon-danger-button"
-                            onClick={() => openDeleteModal(task)}
-                            title="Delete task"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openDeleteModal(task);
+                            }}
                           >
                             <Trash2 size={16} />
                           </button>
                         )}
                       </div>
                     ) : (
-                      <div className="task-actions-row">
+                      <div
+                        className="task-actions-row"
+                        onClick={(event) => event.stopPropagation()}
+                      >
                         <select
                           value={currentStatus}
+                          disabled={!canUpdateProgress(task)}
                           onChange={(event) =>
                             handleStatusUpdate(task, event.target.value)
                           }
                         >
-                          {allowedStatuses.map((status) => (
-                            <option key={status.value} value={status.value}>
-                              {status.label}
+                          {allowedStatuses.map((taskStatus) => (
+                            <option key={taskStatus.value} value={taskStatus.value}>
+                              {taskStatus.label}
                             </option>
                           ))}
                         </select>
 
                         <input
                           value={submissionNotes[task.id] || ""}
+                          disabled={!canUpdateProgress(task)}
                           onChange={(event) =>
-                            setSubmissionNotes((prev) => ({
-                              ...prev,
+                            setSubmissionNotes((previous) => ({
+                              ...previous,
                               [task.id]: event.target.value,
                             }))
                           }
-                          placeholder="Note"
+                          placeholder="Add note"
                         />
 
                         <button
                           type="button"
                           className="save-small-button"
+                          disabled={!canUpdateProgress(task)}
                           onClick={() => handleSaveSubmissionNote(task)}
                         >
                           <Save size={16} />
                         </button>
 
-                        {isTaskManager && (
-                          <button
-                            type="button"
-                            className="icon-danger-button"
-                            onClick={() => openDeleteModal(task)}
-                            title="Delete task"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          className="view-task-button"
+                          onClick={() => openTaskDetails(task)}
+                        >
+                          <Eye size={15} />
+                        </button>
                       </div>
                     )}
                   </article>
@@ -1156,66 +1242,570 @@ export default function TasksPage() {
             </div>
           </div>
         </div>
+      </div>
 
-        {deleteModal.open && (
-          <div className="erp-modal-backdrop">
-            <div className="erp-confirm-modal">
-              <button
-                type="button"
-                className="confirm-close-button"
-                onClick={closeDeleteModal}
-                disabled={deleteModal.loading}
-              >
-                <X size={17} />
-              </button>
-
-              <div className="confirm-icon danger">
-                <AlertTriangle size={25} />
-              </div>
-
-              <h2>Delete Task?</h2>
-
-              <p className="confirm-message">
-                This task will be permanently deleted from task assignment. This
-                action cannot be undone.
-              </p>
-
-              <div className="confirm-task-card">
-                <div className="confirm-task-icon">
-                  <ClipboardList size={20} />
+      {showCreateForm && (
+        <div className="task-modal-backdrop" onMouseDown={closeCreateModal}>
+          <form
+            className="task-modal-card"
+            onSubmit={handleCreateTask}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div className="card-title-row">
+                <div className="card-title-icon">
+                  <PlusCircle size={19} />
                 </div>
 
                 <div>
-                  <strong>{deleteModal.task?.title || "Task"}</strong>
-                  <span>
-                    Project: {deleteModal.task ? getProjectName(deleteModal.task) : "-"}
-                  </span>
+                  <h2>Create Task</h2>
+                  <p>
+                    {isIntern
+                      ? "Create a task for yourself."
+                      : "Select a project and assign work to a software user."}
+                  </p>
                 </div>
               </div>
 
-              <div className="confirm-actions">
-                <button
-                  type="button"
-                  className="confirm-secondary-btn"
-                  onClick={closeDeleteModal}
-                  disabled={deleteModal.loading}
+              <button
+                type="button"
+                className="modal-close-button"
+                onClick={closeCreateModal}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="form-content-grid">
+              <div className="form-group project-group">
+                <label>
+                  Project <span>*</span>
+                </label>
+
+                <select
+                  name="project_id"
+                  value={formData.project_id}
+                  onChange={updateField}
+                  required
                 >
-                  Cancel
-                </button>
+                  <option value="">Select project</option>
+
+                  {activeProjects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.title}
+                      {project.client_company_name
+                        ? ` — ${project.client_company_name}`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Assign To</label>
+
+                <select
+                  name="assigned_to_user_id"
+                  value={formData.assigned_to_user_id}
+                  onChange={updateField}
+                  disabled={isIntern}
+                  required
+                >
+                  <option value="">Select user</option>
+
+                  {assignableUsers.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.full_name || item.person?.full_name || item.email} —{" "}
+                      {formatOptionLabel(item.role)}
+                    </option>
+                  ))}
+                </select>
+
+                {isIntern && (
+                  <small className="helper-text">
+                    Interns can only assign tasks to themselves.
+                  </small>
+                )}
+              </div>
+
+              <div className="form-group">
+                <label>Task Title</label>
+
+                <input
+                  name="title"
+                  value={formData.title}
+                  onChange={updateField}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Priority</label>
+
+                <select
+                  name="priority"
+                  value={formData.priority}
+                  onChange={updateField}
+                >
+                  {PRIORITIES.map((priority) => (
+                    <option key={priority} value={priority}>
+                      {formatOptionLabel(priority)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Due Date</label>
+
+                <input
+                  name="due_date"
+                  type="date"
+                  value={formData.due_date}
+                  onChange={updateField}
+                />
+              </div>
+
+              <div className="form-group description-group">
+                <label>Description</label>
+
+                <textarea
+                  name="description"
+                  value={formData.description}
+                  onChange={updateField}
+                />
+              </div>
+
+              <div className="form-group description-group">
+                <label>Remarks</label>
+
+                <textarea
+                  name="remarks"
+                  value={formData.remarks}
+                  onChange={updateField}
+                />
+              </div>
+            </div>
+
+            <div className="form-actions-row">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={closeCreateModal}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={saving}
+              >
+                {saving ? "Creating..." : "Create Task"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {selectedTask && (
+        <div className="task-modal-backdrop" onMouseDown={closeTaskDetails}>
+          <section
+            className="task-details-modal"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div className="card-title-row">
+                <div className="card-title-icon">
+                  <ClipboardList size={19} />
+                </div>
+
+                <div>
+                  <h2>{selectedTask.title}</h2>
+                  <p>
+                    Task #{selectedTask.id} •{" "}
+                    {formatOptionLabel(selectedTask.status)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="details-header-actions">
+                {detailsMode === "view" && canFullyEditTask(selectedTask) && (
+                  <button
+                    type="button"
+                    className="edit-task-button"
+                    onClick={() => setDetailsMode("edit")}
+                  >
+                    <Edit3 size={16} />
+                    Edit
+                  </button>
+                )}
 
                 <button
                   type="button"
-                  className="confirm-danger-btn"
-                  onClick={handleConfirmDeleteTask}
-                  disabled={deleteModal.loading}
+                  className="modal-close-button"
+                  onClick={closeTaskDetails}
                 >
-                  {deleteModal.loading ? "Deleting..." : "Delete Task"}
+                  <X size={18} />
                 </button>
               </div>
             </div>
+
+            {detailsMode === "view" ? (
+              <>
+                {!canFullyEditTask(selectedTask) && (
+                  <div className="permission-banner">
+                    <Lock size={17} />
+                    <span>
+                      This task was assigned by a higher-role user. You can update
+                      only status and your submission note.
+                    </span>
+                  </div>
+                )}
+
+                <div className="task-details-grid">
+                  <article>
+                    <span>Project</span>
+                    <strong>{getProjectName(selectedTask)}</strong>
+                  </article>
+
+                  <article>
+                    <span>Priority</span>
+                    <strong>{formatOptionLabel(selectedTask.priority)}</strong>
+                  </article>
+
+                  <article>
+                    <span>Status</span>
+                    <strong>{formatOptionLabel(selectedTask.status)}</strong>
+                  </article>
+
+                  <article>
+                    <span>Due Date</span>
+                    <strong>{selectedTask.due_date || "-"}</strong>
+                  </article>
+
+                  <article>
+                    <span>Assigned To</span>
+                    <strong>{getUserName(selectedTask.assigned_to_user_id)}</strong>
+                  </article>
+
+                  <article>
+                    <span>Assigned By</span>
+                    <strong>{getUserName(selectedTask.assigned_by_user_id)}</strong>
+                  </article>
+
+                  <article>
+                    <span>Created</span>
+                    <strong>
+                      {selectedTask.created_at
+                        ? new Date(selectedTask.created_at).toLocaleString("en-IN")
+                        : "-"}
+                    </strong>
+                  </article>
+
+                  <article>
+                    <span>Last Updated</span>
+                    <strong>
+                      {selectedTask.updated_at
+                        ? new Date(selectedTask.updated_at).toLocaleString("en-IN")
+                        : "-"}
+                    </strong>
+                  </article>
+                </div>
+
+                <div className="task-detail-block">
+                  <span>Description</span>
+                  <p>{selectedTask.description || "No description added."}</p>
+                </div>
+
+                <div className="task-detail-block admin-remarks-block">
+                  <span>Admin / Manager Remarks</span>
+                  <p>
+                    {removeProjectLine(selectedTask.remarks) ||
+                      "No admin remarks added."}
+                  </p>
+                </div>
+
+                <div className="task-detail-block submission-block">
+                  <span>Submission Note</span>
+                  <p>{selectedTask.submission_note || "No submission note added."}</p>
+                </div>
+
+                {canUpdateProgress(selectedTask) && (
+                  <div className="progress-update-panel">
+                    <div className="form-group">
+                      <label>Status</label>
+
+                      <select
+                        name="status"
+                        value={editForm.status}
+                        onChange={updateEditField}
+                      >
+                        {getAllowedTaskStatuses(selectedTask.status).map(
+                          (taskStatus) => (
+                            <option
+                              key={taskStatus.value}
+                              value={taskStatus.value}
+                            >
+                              {taskStatus.label}
+                            </option>
+                          )
+                        )}
+                      </select>
+                    </div>
+
+                    <div className="form-group">
+                      <label>Your Submission Note</label>
+
+                      <textarea
+                        name="submission_note"
+                        value={editForm.submission_note}
+                        onChange={updateEditField}
+                        placeholder="Add your work update"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={handleSaveTaskDetails}
+                      disabled={detailsSaving}
+                    >
+                      <Save size={16} />
+                      {detailsSaving ? "Saving..." : "Save Progress"}
+                    </button>
+                  </div>
+                )}
+
+                <div className="details-footer">
+                  {canDeleteTask(selectedTask) && (
+                    <button
+                      type="button"
+                      className="details-delete-button"
+                      onClick={() => openDeleteModal(selectedTask)}
+                    >
+                      <Trash2 size={16} />
+                      Delete Task
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={closeTaskDetails}
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="form-content-grid details-edit-grid">
+                  <div className="form-group project-group">
+                    <label>Project</label>
+
+                    <select
+                      name="project_id"
+                      value={editForm.project_id}
+                      onChange={updateEditField}
+                    >
+                      <option value="">Select project</option>
+                      {activeProjects.map((project) => (
+                        <option key={project.id} value={project.id}>
+                          {project.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label>Assign To</label>
+
+                    <select
+                      name="assigned_to_user_id"
+                      value={editForm.assigned_to_user_id}
+                      onChange={updateEditField}
+                    >
+                      {assignableUsers.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.full_name || item.person?.full_name || item.email}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label>Task Title</label>
+
+                    <input
+                      name="title"
+                      value={editForm.title}
+                      onChange={updateEditField}
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Priority</label>
+
+                    <select
+                      name="priority"
+                      value={editForm.priority}
+                      onChange={updateEditField}
+                    >
+                      {PRIORITIES.map((priority) => (
+                        <option key={priority} value={priority}>
+                          {formatOptionLabel(priority)}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label>Status</label>
+
+                    <select
+                      name="status"
+                      value={editForm.status}
+                      onChange={updateEditField}
+                    >
+                      {getAllowedTaskStatuses(selectedTask.status).map(
+                        (taskStatus) => (
+                          <option key={taskStatus.value} value={taskStatus.value}>
+                            {taskStatus.label}
+                          </option>
+                        )
+                      )}
+                    </select>
+                  </div>
+
+                  <div className="form-group">
+                    <label>Due Date</label>
+
+                    <input
+                      name="due_date"
+                      type="date"
+                      value={editForm.due_date}
+                      onChange={updateEditField}
+                    />
+                  </div>
+
+                  <div className="form-group description-group">
+                    <label>Description</label>
+
+                    <textarea
+                      name="description"
+                      value={editForm.description}
+                      onChange={updateEditField}
+                    />
+                  </div>
+
+                  <div className="form-group description-group">
+                    <label>Admin / Manager Remarks</label>
+
+                    <textarea
+                      name="remarks"
+                      value={editForm.remarks}
+                      onChange={updateEditField}
+                    />
+                  </div>
+
+                  <div className="form-group description-group">
+                    <label>Submission Note</label>
+
+                    <textarea
+                      name="submission_note"
+                      value={editForm.submission_note}
+                      onChange={updateEditField}
+                    />
+                  </div>
+                </div>
+
+                <div className="details-footer">
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => {
+                      fillEditForm(selectedTask);
+                      setDetailsMode("view");
+                    }}
+                    disabled={detailsSaving}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={handleSaveTaskDetails}
+                    disabled={detailsSaving}
+                  >
+                    <Save size={16} />
+                    {detailsSaving ? "Saving..." : "Save Changes"}
+                  </button>
+                </div>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+
+      {deleteModal.open && (
+        <div className="erp-modal-backdrop">
+          <div className="erp-confirm-modal">
+            <button
+              type="button"
+              className="confirm-close-button"
+              onClick={closeDeleteModal}
+              disabled={deleteModal.loading}
+            >
+              <X size={17} />
+            </button>
+
+            <div className="confirm-icon danger">
+              <AlertTriangle size={25} />
+            </div>
+
+            <h2>Delete Task?</h2>
+
+            <p className="confirm-message">
+              This task will be permanently deleted. This action cannot be
+              undone.
+            </p>
+
+            <div className="confirm-task-card">
+              <ClipboardList size={20} />
+
+              <div>
+                <strong>{deleteModal.task?.title || "Task"}</strong>
+                <span>
+                  Project:{" "}
+                  {deleteModal.task ? getProjectName(deleteModal.task) : "-"}
+                </span>
+              </div>
+            </div>
+
+            <div className="confirm-actions">
+              <button
+                type="button"
+                className="confirm-secondary-btn"
+                onClick={closeDeleteModal}
+                disabled={deleteModal.loading}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                className="confirm-danger-btn"
+                onClick={handleConfirmDeleteTask}
+                disabled={deleteModal.loading}
+              >
+                {deleteModal.loading ? "Deleting..." : "Delete Task"}
+              </button>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </>
   );
 }
@@ -1229,41 +1819,36 @@ const tasksPageStyles = `
   gap: 18px;
 }
 
+.page-header,
+.task-view-tabs-card,
+.tasks-toolbar-card,
+.tasks-list-card {
+  width: 100%;
+  border-radius: 20px;
+  background: #ffffff;
+  border: 1px solid var(--erp-border, #e2e8f0);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.05);
+}
+
 .page-header {
   min-height: 92px;
   padding: 20px 22px;
-  border-radius: 20px;
-  background: #ffffff;
-  border: 1px solid var(--erp-border);
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.05);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
 }
 
-.page-title-wrap {
+.page-title-wrap,
+.card-title-row,
+.details-header-actions {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-width: 0;
 }
 
-.back-button {
-  width: 40px;
-  height: 40px;
-  border: 1px solid #dbeafe;
-  background: #ffffff;
-  color: #2563eb;
-  border-radius: 13px;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
-  cursor: pointer;
-}
-
-.page-title-icon {
+.page-title-icon,
+.card-title-icon {
   width: 44px;
   height: 44px;
   border-radius: 15px;
@@ -1275,37 +1860,58 @@ const tasksPageStyles = `
   flex-shrink: 0;
 }
 
+.back-button,
+.modal-close-button,
+.view-task-button,
+.save-small-button,
+.icon-danger-button {
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.back-button,
+.modal-close-button {
+  width: 40px;
+  height: 40px;
+  border: 1px solid #dbeafe;
+  background: #ffffff;
+  color: #2563eb;
+  border-radius: 13px;
+}
+
 .page-header h1 {
   margin: 0;
   color: #06142b;
   font-size: 27px;
-  line-height: 1.1;
-  font-weight: 700;
 }
 
-.page-header p {
-  margin: 7px 0 0;
-  color: #334155;
-  font-size: 13px;
-  font-weight: 500;
+.page-header p,
+.card-title-row p,
+.list-header p {
+  margin: 6px 0 0;
+  color: #52677e;
+  font-size: 12px;
 }
 
-.create-task-button {
-  min-width: 128px;
-  height: 42px;
+.create-task-button,
+.primary-button,
+.edit-task-button {
+  min-height: 42px;
   border: none;
+  border-radius: 14px;
   background: #2563eb;
   color: #ffffff;
-  border-radius: 14px;
+  font-weight: 800;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 700;
-  flex-shrink: 0;
-  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.18);
+  gap: 7px;
   cursor: pointer;
+}
+
+.create-task-button {
+  padding: 0 17px;
 }
 
 .page-notification {
@@ -1315,7 +1921,6 @@ const tasksPageStyles = `
   display: flex;
   align-items: center;
   gap: 10px;
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.05);
 }
 
 .page-notification.success {
@@ -1332,19 +1937,13 @@ const tasksPageStyles = `
 
 .page-notification span {
   flex: 1;
-  font-size: 13px;
   font-weight: 800;
 }
 
 .page-notification button {
-  width: 30px;
-  height: 30px;
   border: none;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.78);
+  background: transparent;
   color: inherit;
-  display: grid;
-  place-items: center;
   cursor: pointer;
 }
 
@@ -1358,9 +1957,8 @@ const tasksPageStyles = `
   min-height: 78px;
   padding: 15px 16px;
   border-radius: 18px;
-  border: 1px solid var(--erp-border);
+  border: 1px solid var(--erp-border, #e2e8f0);
   background: #ffffff;
-  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.045);
   display: flex;
   align-items: center;
   gap: 13px;
@@ -1371,14 +1969,12 @@ const tasksPageStyles = `
   height: 42px;
   padding: 11px;
   border-radius: 15px;
-  flex-shrink: 0;
 }
 
 .summary-card p {
   margin: 0;
   color: #52677e;
   font-size: 12px;
-  font-weight: 600;
 }
 
 .summary-card strong {
@@ -1386,97 +1982,36 @@ const tasksPageStyles = `
   margin-top: 4px;
   color: #06142b;
   font-size: 24px;
-  font-weight: 800;
-  line-height: 1;
 }
 
-.summary-blue svg {
-  color: #2563eb;
-  background: #eff6ff;
-}
-
-.summary-orange svg {
-  color: #ea580c;
-  background: #fff7ed;
-}
-
-.summary-purple svg {
-  color: #7c3aed;
-  background: #f5f3ff;
-}
-
-.summary-green svg {
-  color: #059669;
-  background: #ecfdf5;
-}
-
-.task-view-tabs-card,
-.tasks-toolbar-card,
-.tasks-list-card {
-  width: 100%;
-  border-radius: 20px;
-  background: #ffffff;
-  border: 1px solid var(--erp-border);
-  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.055);
-}
+.summary-blue svg { color: #2563eb; background: #eff6ff; }
+.summary-orange svg { color: #ea580c; background: #fff7ed; }
+.summary-purple svg { color: #7c3aed; background: #f5f3ff; }
+.summary-green svg { color: #059669; background: #ecfdf5; }
 
 .task-view-tabs-card {
-  height: 66px;
   padding: 10px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  align-items: stretch;
-  box-sizing: border-box;
 }
 
 .task-view-tab {
-  width: 100%;
-  height: 46px;
   min-height: 46px;
-  box-sizing: border-box;
   border-radius: 15px;
   border: 1px solid #dbe5f2;
   background: #ffffff;
-  color: #334155;
+  padding: 0 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 0 16px;
-  font-family: inherit;
   cursor: pointer;
-}
-
-.task-view-tab span {
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.task-view-tab strong {
-  min-width: 30px;
-  height: 26px;
-  padding: 0 9px;
-  border-radius: 999px;
-  background: #f1f5f9;
-  color: #0f172a;
-  font-size: 13px;
-  font-weight: 900;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .task-view-tab.active {
   border-color: #bfdbfe;
   background: #eff6ff;
   color: #2563eb;
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.08);
-}
-
-.task-view-tab.active strong {
-  background: #2563eb;
-  color: #ffffff;
 }
 
 .task-view-tab.active.completed {
@@ -1485,24 +2020,304 @@ const tasksPageStyles = `
   color: #059669;
 }
 
-.task-view-tab.active.completed strong {
-  background: #059669;
-  color: #ffffff;
+.tasks-toolbar-card {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  gap: 14px;
 }
 
-.task-modal-backdrop {
+.search-box {
+  min-height: 42px;
+  border: 1px solid #dbe5f2;
+  border-radius: 14px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.search-box input,
+.toolbar-filters select,
+.clear-filter-button,
+.form-group input,
+.form-group select,
+.form-group textarea,
+.task-actions-row input,
+.task-actions-row select {
+  width: 100%;
+  min-height: 40px;
+  border-radius: 13px;
+  border: 1px solid #dbe5f2;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 9px 12px;
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+}
+
+.search-box input {
+  border: none;
+  padding: 0;
+}
+
+.toolbar-filters {
+  display: flex;
+  gap: 10px;
+}
+
+.toolbar-filters select {
+  min-width: 145px;
+}
+
+.clear-filter-button {
+  width: auto;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tasks-list-card {
+  min-height: 560px;
+  overflow: hidden;
+}
+
+.list-header {
+  min-height: 74px;
+  padding: 18px 20px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.list-header h2,
+.card-title-row h2 {
+  margin: 0;
+  color: #06142b;
+  font-size: 21px;
+}
+
+.task-card-list {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.task-card {
+  min-height: 330px;
+  border-radius: 18px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  padding: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.task-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 15px 30px rgba(15, 23, 42, 0.08);
+}
+
+.task-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-title-wrap {
+  min-width: 0;
+}
+
+.task-title-wrap h3 {
+  margin: 0;
+  color: #06142b;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-title-wrap p {
+  margin: 4px 0 0;
+  color: #52677e;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-priority {
+  height: 23px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+}
+
+.priority-low { color: #059669; background: #ecfdf5; border: 1px solid #bbf7d0; }
+.priority-medium { color: #2563eb; background: #eff6ff; border: 1px solid #bfdbfe; }
+.priority-high { color: #ea580c; background: #fff7ed; border: 1px solid #fed7aa; }
+.priority-urgent { color: #dc2626; background: #fef2f2; border: 1px solid #fecaca; }
+
+.task-project-row,
+.task-info-row,
+.task-mini-grid div,
+.task-note {
+  padding: 9px 10px;
+  border-radius: 13px;
+  background: #f8fafc;
+  border: 1px solid #eef2f7;
+}
+
+.task-project-row {
+  background: #eff6ff;
+  border-color: #dbeafe;
+}
+
+.task-project-row span,
+.task-info-row span,
+.task-mini-grid span {
+  display: block;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.task-project-row strong,
+.task-info-row strong,
+.task-mini-grid strong {
+  display: block;
+  margin-top: 4px;
+  color: #0f172a;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-info-row small {
+  display: block;
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 10px;
+}
+
+.task-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.task-note p {
+  margin: 0;
+  color: #334155;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.empty-note p {
+  color: #94a3b8;
+}
+
+.task-actions-row,
+.task-footer-row {
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) 38px 38px;
+  gap: 8px;
+  align-items: center;
+}
+
+.task-footer-row {
+  grid-template-columns: minmax(0, 1fr) 38px 38px;
+}
+
+.save-small-button,
+.view-task-button,
+.icon-danger-button {
+  width: 38px;
+  height: 38px;
+  border-radius: 13px;
+}
+
+.save-small-button,
+.view-task-button {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.icon-danger-button {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.completed-pill {
+  width: fit-content;
+  padding: 8px 13px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #bbf7d0;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pagination-row {
+  min-height: 62px;
+  padding: 14px 20px;
+  border-top: 1px solid #eef2f7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pagination-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.pagination-actions button,
+.secondary-button {
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: 13px;
+  border: 1px solid #dbe5f2;
+  background: #ffffff;
+  color: #0f172a;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pagination-actions button:disabled,
+.primary-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.task-modal-backdrop,
+.erp-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 80;
-  background: rgba(15, 23, 42, 0.48);
-  backdrop-filter: blur(5px);
+  z-index: 9999;
+  background: rgba(15, 23, 42, 0.52);
+  backdrop-filter: blur(6px);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 22px;
 }
 
-.task-modal-card {
+.task-modal-card,
+.task-details-modal {
   width: min(1080px, 100%);
   max-height: calc(100vh - 44px);
   overflow-y: auto;
@@ -1520,60 +2335,11 @@ const tasksPageStyles = `
   gap: 14px;
   padding-bottom: 16px;
   margin-bottom: 16px;
-  border-bottom: 1px solid var(--erp-border-soft);
+  border-bottom: 1px solid #eef2f7;
 }
 
-.modal-title-row {
-  border-bottom: none;
-  padding-bottom: 0;
-  margin-bottom: 0;
-}
-
-.modal-close-button {
-  width: 40px;
-  height: 40px;
-  border-radius: 13px;
-  border: 1px solid #dbe5f2;
-  background: #ffffff;
-  color: #0f172a;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  cursor: pointer;
-}
-
-.card-title-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.card-title-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 14px;
-  display: grid;
-  place-items: center;
-  color: #2563eb;
-  background: #eef6ff;
-  border: 1px solid #dbeafe;
-  flex-shrink: 0;
-}
-
-.card-title-row h2,
-.list-header h2 {
-  margin: 0;
-  color: #06142b;
-  font-size: 21px;
-  font-weight: 700;
-}
-
-.card-title-row p,
-.list-header p {
-  margin: 6px 0 0;
-  color: #52677e;
-  font-size: 12px;
-  font-weight: 500;
+.edit-task-button {
+  padding: 0 14px;
 }
 
 .form-content-grid {
@@ -1582,19 +2348,15 @@ const tasksPageStyles = `
   gap: 13px;
 }
 
+.project-group,
+.description-group {
+  grid-column: span 2;
+}
+
 .form-group {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  min-width: 0;
-}
-
-.project-group {
-  grid-column: span 2;
-}
-
-.description-group {
-  grid-column: span 2;
 }
 
 .form-group label {
@@ -1603,34 +2365,9 @@ const tasksPageStyles = `
   font-weight: 700;
 }
 
-.form-group label span {
-  color: #dc2626;
-  font-weight: 900;
-}
-
+.form-group label span,
 .helper-text {
   color: #dc2626;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.form-group input,
-.form-group select,
-.form-group textarea,
-.toolbar-filters select,
-.search-box input,
-.task-actions-row select,
-.task-actions-row input {
-  width: 100%;
-  min-height: 40px;
-  border-radius: 13px;
-  border: 1px solid #dbe5f2;
-  background: #ffffff;
-  color: #0f172a;
-  padding: 9px 12px;
-  font-size: 13px;
-  outline: none;
-  font-family: inherit;
 }
 
 .form-group textarea {
@@ -1638,499 +2375,113 @@ const tasksPageStyles = `
   resize: vertical;
 }
 
-.form-group input:focus,
-.form-group select:focus,
-.form-group textarea:focus,
-.toolbar-filters select:focus,
-.search-box:focus-within,
-.task-actions-row select:focus,
-.task-actions-row input:focus {
-  border-color: #bfdbfe;
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.10);
-}
-
-.form-actions-row {
+.form-actions-row,
+.details-footer {
+  margin-top: 18px;
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-  margin-top: 16px;
 }
 
 .primary-button,
 .secondary-button {
   min-width: 135px;
-  height: 42px;
-  border-radius: 14px;
-  font-size: 13px;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
+  padding: 0 15px;
 }
 
-.primary-button {
-  border: none;
-  background: #2563eb;
-  color: #ffffff;
-}
-
-.secondary-button {
-  border: 1px solid #dbe5f2;
-  background: #ffffff;
-  color: #0f172a;
-}
-
-.primary-button:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.tasks-toolbar-card {
-  padding: 16px;
-  display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto;
-  gap: 14px;
-  align-items: center;
-}
-
-.search-box {
-  min-height: 42px;
-  border-radius: 14px;
-  border: 1px solid #dbe5f2;
-  background: #ffffff;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 12px;
-}
-
-.search-box svg {
-  color: #64748b;
-  flex-shrink: 0;
-}
-
-.search-box input {
-  border: none;
-  min-height: 40px;
-  padding: 0;
-}
-
-.toolbar-filters {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.toolbar-filters select {
-  min-width: 145px;
-}
-
-.clear-filter-button {
-  height: 40px;
-  padding: 0 14px;
-  border-radius: 13px;
-  border: 1px solid #dbe5f2;
-  background: #ffffff;
-  color: #0f172a;
-  font-size: 13px;
-  font-weight: 700;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.tasks-list-card {
-  min-height: 560px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.list-header {
-  height: 74px;
-  min-height: 74px;
-  padding: 18px 20px;
-  border-bottom: 1px solid var(--erp-border-soft);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  box-sizing: border-box;
-}
-
-.task-card-list {
-  flex: 1;
-  padding: 16px;
+.task-details-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  align-content: start;
-  gap: 14px;
+  gap: 10px;
 }
 
-.task-card {
-  height: 330px;
-  min-height: 330px;
-  max-height: 330px;
-  border-radius: 18px;
-  border: 1px solid var(--erp-border);
-  background: #ffffff;
+.task-details-grid article,
+.task-detail-block,
+.progress-update-panel {
   padding: 13px;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.035);
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  overflow: hidden;
-  box-sizing: border-box;
+  border-radius: 15px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
 }
 
-.task-card-header {
-  height: 40px;
-  min-height: 40px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  overflow: hidden;
-}
-
-.task-title-wrap {
-  min-width: 0;
-}
-
-.task-title-wrap h3 {
-  margin: 0;
-  color: #06142b;
-  font-size: 14px;
-  font-weight: 800;
-  line-height: 1.25;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.task-title-wrap p {
-  margin: 4px 0 0;
-  color: #52677e;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.25;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.task-priority {
-  height: 23px;
-  min-height: 23px;
-  padding: 0 8px;
-  border-radius: 999px;
+.task-details-grid span,
+.task-detail-block > span {
+  color: #64748b;
   font-size: 10px;
   font-weight: 800;
-  white-space: nowrap;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  text-transform: uppercase;
 }
 
-.priority-low {
-  color: #059669;
+.task-details-grid strong {
+  display: block;
+  margin-top: 5px;
+  color: #06142b;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.task-detail-block {
+  margin-top: 12px;
+}
+
+.task-detail-block p {
+  margin: 8px 0 0;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.admin-remarks-block {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.submission-block {
   background: #ecfdf5;
-  border: 1px solid #bbf7d0;
+  border-color: #bbf7d0;
 }
 
-.priority-medium {
-  color: #2563eb;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-}
-
-.priority-high {
-  color: #ea580c;
+.permission-banner {
+  min-height: 44px;
+  margin-bottom: 13px;
+  padding: 10px 12px;
+  border-radius: 13px;
   background: #fff7ed;
   border: 1px solid #fed7aa;
-}
-
-.priority-urgent {
-  color: #dc2626;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-}
-
-.task-project-row {
-  height: 42px;
-  min-height: 42px;
-  padding: 8px 10px;
-  border-radius: 13px;
-  background: #eff6ff;
-  border: 1px solid #dbeafe;
-  box-sizing: border-box;
-  overflow: hidden;
-}
-
-.task-project-row span {
-  display: block;
-  color: #2563eb;
-  font-size: 9px;
-  font-weight: 900;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.task-project-row strong {
-  display: block;
-  margin-top: 4px;
-  color: #06142b;
-  font-size: 11px;
-  font-weight: 900;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.task-info-row {
-  height: 54px;
-  min-height: 54px;
-  padding: 8px 10px;
-  border-radius: 13px;
-  background: #f8fafc;
-  border: 1px solid #eef2f7;
-  box-sizing: border-box;
-  overflow: hidden;
-}
-
-.task-info-row span,
-.task-mini-grid span {
-  display: block;
-  color: #64748b;
-  font-size: 9px;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.task-info-row strong,
-.task-mini-grid strong {
-  display: block;
-  margin-top: 4px;
-  color: #0f172a;
-  font-size: 11px;
-  font-weight: 800;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-info-row small {
-  display: block;
-  margin-top: 3px;
-  color: #64748b;
-  font-size: 10px;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-mini-grid {
-  height: 50px;
-  min-height: 50px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.task-mini-grid div {
-  height: 50px;
-  min-height: 50px;
-  padding: 8px 10px;
-  border-radius: 13px;
-  background: #f8fafc;
-  border: 1px solid #eef2f7;
-  box-sizing: border-box;
-  overflow: hidden;
-}
-
-.task-note {
-  height: 38px;
-  min-height: 38px;
-  padding: 9px 10px;
-  border-radius: 13px;
-  background: #f8fbff;
-  border: 1px solid #dbeafe;
-  box-sizing: border-box;
-  overflow: hidden;
-}
-
-.task-note p {
-  margin: 0;
-  color: #334155;
-  font-size: 11px;
-  line-height: 1.35;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.task-note strong {
-  color: #2563eb;
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.empty-note {
-  background: #f8fafc;
-  border-color: #eef2f7;
-}
-
-.empty-note p {
-  color: #94a3b8;
-}
-
-.task-actions-row,
-.task-footer-row {
-  height: 42px;
-  min-height: 42px;
-  margin-top: auto;
-  display: grid;
-  grid-template-columns: 112px minmax(0, 1fr) 38px 38px;
-  gap: 8px;
+  color: #c2410c;
+  display: flex;
   align-items: center;
-}
-
-.task-actions-row select,
-.task-actions-row input {
-  height: 38px;
-  min-height: 38px;
-  padding: 7px 10px;
-}
-
-.task-footer-row {
-  grid-template-columns: minmax(0, 1fr) 38px;
-}
-
-.save-small-button,
-.icon-danger-button {
-  width: 38px;
-  height: 38px;
-  border-radius: 13px;
-  display: inline-grid;
-  place-items: center;
-  flex-shrink: 0;
-  cursor: pointer;
-}
-
-.save-small-button {
-  border: 1px solid #bfdbfe;
-  background: #eff6ff;
-  color: #2563eb;
-}
-
-.icon-danger-button {
-  border: 1px solid #fecaca;
-  background: #fef2f2;
-  color: #dc2626;
-}
-
-.completed-pill {
-  width: fit-content;
-  max-width: 100%;
-  height: 34px;
-  padding: 0 13px;
-  border-radius: 999px;
-  background: #ecfdf5;
-  color: #059669;
-  border: 1px solid #bbf7d0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  gap: 8px;
   font-size: 12px;
-  font-weight: 800;
-}
-
-.empty-state-card {
-  flex: 1;
-  min-height: 260px;
-  padding: 34px 20px;
-  color: #2563eb;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  text-align: center;
-  gap: 10px;
-}
-
-.empty-state-card h3 {
-  margin: 0;
-  color: #06142b;
-  font-size: 18px;
   font-weight: 700;
 }
 
-.empty-state-card p {
-  max-width: 380px;
-  margin: 0;
-  color: #52677e;
-  font-size: 13px;
-  font-weight: 500;
+.progress-update-panel {
+  margin-top: 13px;
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
 }
 
-.pagination-row {
-  height: 62px;
-  min-height: 62px;
-  padding: 14px 20px;
-  border-top: 1px solid var(--erp-border-soft);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  box-sizing: border-box;
+.progress-update-panel textarea {
+  min-height: 70px;
 }
 
-.pagination-row p {
-  color: #52677e;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.pagination-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.pagination-actions button {
-  height: 38px;
-  padding: 0 13px;
+.details-delete-button {
+  min-height: 42px;
+  padding: 0 15px;
+  margin-right: auto;
+  border: 1px solid #fecaca;
   border-radius: 13px;
-  border: 1px solid #dbe5f2;
-  background: #ffffff;
-  color: #0f172a;
+  background: #fef2f2;
+  color: #dc2626;
+  font-weight: 800;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 700;
+  gap: 7px;
   cursor: pointer;
-}
-
-.pagination-actions button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.erp-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: rgba(15, 23, 42, 0.52);
-  backdrop-filter: blur(6px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
 }
 
 .erp-confirm-modal {
@@ -2138,8 +2489,6 @@ const tasksPageStyles = `
   position: relative;
   border-radius: 24px;
   background: #ffffff;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 34px 80px rgba(15, 23, 42, 0.28);
   padding: 28px;
   text-align: center;
 }
@@ -2152,10 +2501,7 @@ const tasksPageStyles = `
   height: 34px;
   border: 1px solid #e2e8f0;
   background: #ffffff;
-  color: #64748b;
   border-radius: 12px;
-  display: grid;
-  place-items: center;
   cursor: pointer;
 }
 
@@ -2177,21 +2523,15 @@ const tasksPageStyles = `
 .erp-confirm-modal h2 {
   margin: 0;
   color: #06142b;
-  font-size: 23px;
-  font-weight: 900;
 }
 
 .confirm-message {
-  margin: 10px auto 18px;
-  max-width: 360px;
+  margin: 10px 0 18px;
   color: #52677e;
   font-size: 13px;
-  line-height: 1.55;
-  font-weight: 600;
 }
 
 .confirm-task-card {
-  min-height: 68px;
   padding: 12px;
   border-radius: 18px;
   background: #f8fafc;
@@ -2202,60 +2542,35 @@ const tasksPageStyles = `
   text-align: left;
 }
 
-.confirm-task-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 15px;
-  background: #eff6ff;
-  color: #2563eb;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-}
-
-.confirm-task-card strong {
+.confirm-task-card strong,
+.confirm-task-card span {
   display: block;
-  color: #06142b;
-  font-size: 14px;
-  font-weight: 900;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .confirm-task-card span {
-  display: block;
-  max-width: 320px;
   margin-top: 4px;
-  color: #52677e;
+  color: #64748b;
   font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .confirm-actions {
+  margin-top: 20px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  margin-top: 20px;
 }
 
 .confirm-secondary-btn,
 .confirm-danger-btn {
   min-height: 44px;
   border-radius: 15px;
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 900;
+  font-weight: 800;
   cursor: pointer;
 }
 
 .confirm-secondary-btn {
   border: 1px solid #dbe5f2;
   background: #ffffff;
-  color: #0f172a;
 }
 
 .confirm-danger-btn {
@@ -2264,10 +2579,22 @@ const tasksPageStyles = `
   color: #ffffff;
 }
 
-.confirm-secondary-btn:disabled,
-.confirm-danger-btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
+.empty-state-card {
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: #2563eb;
+}
+
+.empty-state-card h3,
+.empty-state-card p {
+  margin: 0;
+}
+
+.empty-state-card p {
+  color: #64748b;
 }
 
 @media (max-width: 1450px) {
@@ -2277,7 +2604,8 @@ const tasksPageStyles = `
 }
 
 @media (max-width: 1280px) {
-  .summary-grid {
+  .summary-grid,
+  .task-details-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2293,10 +2621,6 @@ const tasksPageStyles = `
   .tasks-toolbar-card {
     grid-template-columns: 1fr;
   }
-
-  .toolbar-filters {
-    flex-wrap: wrap;
-  }
 }
 
 @media (max-width: 980px) {
@@ -2304,49 +2628,26 @@ const tasksPageStyles = `
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .task-actions-row {
-    grid-template-columns: 1fr 1fr 38px 38px;
-    height: 86px;
-    min-height: 86px;
-  }
-
-  .task-actions-row select {
-    grid-column: span 2;
-  }
-
-  .task-actions-row input {
-    grid-column: span 2;
-  }
-
-  .task-card {
-    height: 375px;
-    min-height: 375px;
-    max-height: 375px;
+  .progress-update-panel {
+    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 760px) {
-  .page-header {
+  .page-header,
+  .modal-header,
+  .details-footer {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .page-title-wrap {
-    align-items: flex-start;
-  }
-
-  .create-task-button {
-    width: 100%;
-  }
-
   .summary-grid,
+  .task-view-tabs-card,
+  .task-card-list,
+  .task-details-grid,
   .form-content-grid,
-  .task-view-tabs-card {
+  .confirm-actions {
     grid-template-columns: 1fr;
-  }
-
-  .task-view-tabs-card {
-    height: auto;
   }
 
   .project-group,
@@ -2354,71 +2655,21 @@ const tasksPageStyles = `
     grid-column: span 1;
   }
 
-  .form-actions-row {
-    justify-content: stretch;
-    flex-direction: column;
-  }
-
-  .primary-button,
-  .secondary-button {
-    width: 100%;
-  }
-
   .toolbar-filters {
     flex-direction: column;
-    width: 100%;
   }
 
   .toolbar-filters select,
-  .clear-filter-button {
+  .clear-filter-button,
+  .create-task-button,
+  .primary-button,
+  .secondary-button,
+  .details-delete-button {
     width: 100%;
-  }
-
-  .task-card-list {
-    grid-template-columns: 1fr;
   }
 
   .task-actions-row {
-    grid-template-columns: 1fr;
-    height: 178px;
-    min-height: 178px;
-  }
-
-  .task-actions-row select,
-  .task-actions-row input {
-    grid-column: auto;
-  }
-
-  .task-card {
-    height: auto;
-    min-height: 390px;
-    max-height: none;
-  }
-
-  .save-small-button,
-  .icon-danger-button {
-    width: 100%;
-  }
-
-  .task-footer-row {
-    grid-template-columns: 1fr;
-    height: 82px;
-    min-height: 82px;
-  }
-
-  .pagination-row {
-    flex-direction: column;
-    align-items: stretch;
-    height: auto;
-  }
-
-  .pagination-actions {
-    width: 100%;
-  }
-
-  .pagination-actions button {
-    flex: 1;
-    justify-content: center;
+    grid-template-columns: 1fr 1fr;
   }
 
   .task-modal-backdrop {
@@ -2426,51 +2677,9 @@ const tasksPageStyles = `
     padding: 14px;
   }
 
-  .task-modal-card {
+  .task-modal-card,
+  .task-details-modal {
     max-height: calc(100vh - 28px);
-    border-radius: 18px;
-  }
-
-  .confirm-actions {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 480px) {
-  .page-header {
-    padding: 16px;
-  }
-
-  .page-title-icon {
-    display: none;
-  }
-
-  .page-header h1 {
-    font-size: 23px;
-  }
-
-  .tasks-toolbar-card {
-    padding: 15px;
-  }
-
-  .list-header {
-    padding: 16px;
-  }
-
-  .task-card-list {
-    padding: 12px;
-  }
-
-  .task-modal-card {
-    padding: 15px;
-  }
-
-  .modal-header {
-    align-items: flex-start;
-  }
-
-  .erp-confirm-modal {
-    padding: 22px;
   }
 }
 `;
