@@ -1,31 +1,38 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  AlertCircle,
+  AlertTriangle,
   ArrowLeft,
-  Building2,
-  CalendarDays,
+  Banknote,
   CheckCircle2,
-  Clock3,
-  Eye,
+  CreditCard,
   IndianRupee,
-  Mail,
-  Percent,
-  Phone,
-  Save,
+  PlusCircle,
+  ReceiptText,
   Search,
   Trash2,
-  UserRound,
   WalletCards,
   X,
+  XCircle,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import api from "../api/api";
 import { useAuth } from "../context/AuthContext";
 
-const ADMIN_ROLES = ["super-admin", "company-admin", "admin", "owner"];
+const ADMIN_ROLES = [
+  "super-admin",
+  "company-admin",
+  "admin",
+  "owner",
+];
 
-const PAYMENT_METHODS = [
+const PAYMENT_ALLOWED_LEAD_STATUSES = [
+  "converted",
+  "delivered",
+  "completed",
+];
+
+const PAYMENT_METHOD_OPTIONS = [
   { value: "cash", label: "Cash" },
   { value: "upi", label: "UPI" },
   { value: "bank_transfer", label: "Bank Transfer" },
@@ -34,21 +41,101 @@ const PAYMENT_METHODS = [
   { value: "other", label: "Other" },
 ];
 
-function normalizeRole(role) {
-  return String(role || "")
+const PAYMENT_TYPE_OPTIONS = [
+  { value: "lead_payment", label: "Lead Payment" },
+  { value: "other_payment", label: "Other Payment" },
+];
+
+function getTodayDate() {
+  const today = new Date();
+
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function normalizeRole(value) {
+  return String(value || "")
     .trim()
     .toLowerCase()
     .replaceAll("_", "-")
     .replaceAll(" ", "-");
 }
 
-function normalizeList(payload) {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.data)) return payload.data;
-  if (Array.isArray(payload?.items)) return payload.items;
-  if (Array.isArray(payload?.results)) return payload.results;
+function normalizePortal(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("_", "-")
+    .replaceAll(" ", "-");
+}
+
+function normalizeStatus(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("_", "-")
+    .replaceAll(" ", "-");
+}
+
+function formatLabel(value) {
+  if (!value) return "-";
+
+  return String(value)
+    .replaceAll("_", " ")
+    .replaceAll("-", " ")
+    .split(" ")
+    .filter(Boolean)
+    .map(
+      (word) =>
+        word.charAt(0).toUpperCase() + word.slice(1)
+    )
+    .join(" ");
+}
+
+function parsePortalAccess(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(normalizePortal)
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map(normalizePortal)
+          .filter(Boolean);
+      }
+    } catch {
+      return [];
+    }
+  }
 
   return [];
+}
+
+function hasPortalAccess(user, portalKey) {
+  const role = normalizeRole(user?.role);
+
+  if (ADMIN_ROLES.includes(role)) {
+    return true;
+  }
+
+  const portalAccess = parsePortalAccess(
+    user?.portal_access
+  );
+
+  const normalizedPortal = normalizePortal(portalKey);
+
+  return (
+    portalAccess.includes(normalizedPortal) ||
+    portalAccess.includes("sales")
+  );
 }
 
 function formatCurrency(value) {
@@ -57,12 +144,8 @@ function formatCurrency(value) {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
-    maximumFractionDigits: 2,
+    maximumFractionDigits: 0,
   }).format(amount);
-}
-
-function formatNumber(value) {
-  return Number(value || 0).toLocaleString("en-IN");
 }
 
 function formatDate(value) {
@@ -81,1686 +164,1651 @@ function formatDate(value) {
   });
 }
 
-function formatDateTime(value) {
-  if (!value) return "-";
+function getErrorMessage(error, fallback) {
+  const detail = error?.response?.data?.detail;
 
-  const parsedDate = new Date(value);
-
-  if (Number.isNaN(parsedDate.getTime())) {
-    return String(value);
+  if (typeof detail === "string") {
+    return detail;
   }
 
-  return parsedDate.toLocaleString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  if (Array.isArray(detail)) {
+    return detail
+      .map(
+        (item) =>
+          item?.msg ||
+          item?.message ||
+          "Validation error"
+      )
+      .join(", ");
+  }
+
+  return fallback;
 }
 
-function getStatusLabel(status) {
-  const value = String(status || "pending").toLowerCase();
-
-  if (value === "paid") return "Paid";
-  if (value === "partial") return "Partial Paid";
-  if (value === "cancelled") return "Cancelled";
-
-  return "Pending";
-}
-
-function getStatusClass(status) {
-  const value = String(status || "pending").toLowerCase();
-
-  if (value === "paid") return "status-paid";
-  if (value === "partial") return "status-partial";
-  if (value === "cancelled") return "status-cancelled";
-
-  return "status-pending";
-}
-
-function getPaymentMethodLabel(value) {
-  const method = PAYMENT_METHODS.find(
-    (item) => item.value === String(value || "").toLowerCase()
-  );
-
-  if (method) return method.label;
-
-  return String(value || "cash")
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
+function getEmptyPaymentForm() {
+  return {
+    payment_type: "lead_payment",
+    lead_id: "",
+    payment_title: "",
+    payer_name: "",
+    payer_phone: "",
+    payer_email: "",
+    amount: "",
+    payment_method: "upi",
+    payment_date: getTodayDate(),
+    reference_number: "",
+    remarks: "",
+  };
 }
 
 function stopPropagation(event) {
   event.stopPropagation();
 }
 
-export default function SalesCommissionPage() {
+export default function ReceivePaymentPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const [commissions, setCommissions] = useState([]);
-  const [summary, setSummary] = useState({});
   const [leads, setLeads] = useState([]);
-  const [users, setUsers] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [paymentSummary, setPaymentSummary] =
+    useState(null);
 
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [form, setForm] = useState(
+    getEmptyPaymentForm()
+  );
+
   const [searchText, setSearchText] = useState("");
+  const [
+    paymentTypeFilter,
+    setPaymentTypeFilter,
+  ] = useState("");
+  const [methodFilter, setMethodFilter] =
+    useState("");
 
-  const [percentageInputs, setPercentageInputs] = useState({});
-  const [paymentInputs, setPaymentInputs] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const [selectedCommissionId, setSelectedCommissionId] = useState(null);
+  const [
+    deletingPaymentId,
+    setDeletingPaymentId,
+  ] = useState(null);
 
-  const [commissionToDelete, setCommissionToDelete] = useState(null);
-  const [paymentToDelete, setPaymentToDelete] = useState(null);
+  const [deleteModal, setDeleteModal] = useState({
+    open: false,
+    payment: null,
+  });
 
-  const [loading, setLoading] = useState(true);
-  const [savingPercentageId, setSavingPercentageId] = useState(null);
-  const [payingId, setPayingId] = useState(null);
-  const [deletingPaymentId, setDeletingPaymentId] = useState(null);
-  const [deletingCommissionId, setDeletingCommissionId] = useState(null);
-
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-
-  const userRole = normalizeRole(user?.role);
-  const isAdminUser = ADMIN_ROLES.includes(userRole);
-
-  const leadMap = useMemo(() => {
-    const map = new Map();
-
-    leads.forEach((lead) => {
-      map.set(Number(lead.id), lead);
+  const [notification, setNotification] =
+    useState({
+      type: "",
+      message: "",
     });
 
-    return map;
-  }, [leads]);
+  const role = normalizeRole(user?.role);
+  const isAdminUser =
+    ADMIN_ROLES.includes(role);
 
-  const userMap = useMemo(() => {
-    const map = new Map();
+  const canUsePaymentPage = hasPortalAccess(
+    user,
+    "receive-payment"
+  );
 
-    users.forEach((item) => {
-      map.set(Number(item.id), item);
+  const showNotification = (type, message) => {
+    setNotification({
+      type,
+      message,
     });
-
-    return map;
-  }, [users]);
-
-  const selectedCommission = useMemo(() => {
-    if (!selectedCommissionId) return null;
-
-    return (
-      commissions.find(
-        (commission) =>
-          Number(commission.id) === Number(selectedCommissionId)
-      ) || null
-    );
-  }, [commissions, selectedCommissionId]);
-
-  const loadData = async () => {
-    setLoading(true);
-    setError("");
-
-    const commissionParams = {};
-
-    if (statusFilter !== "all") {
-      commissionParams.status_filter = statusFilter;
-    }
-
-    try {
-      const commissionResponse = await api.get("/commissions", {
-        params: commissionParams,
-      });
-
-      const commissionItems = normalizeList(commissionResponse?.data);
-
-      setCommissions(commissionItems);
-
-      setPercentageInputs((previous) => {
-        const next = { ...previous };
-
-        commissionItems.forEach((commission) => {
-          next[commission.id] = String(
-            Number(commission.commission_percentage || 0)
-          );
-        });
-
-        return next;
-      });
-
-      if (selectedCommissionId) {
-        const selectedStillExists = commissionItems.some(
-          (commission) =>
-            Number(commission.id) === Number(selectedCommissionId)
-        );
-
-        if (!selectedStillExists) {
-          setSelectedCommissionId(null);
-        }
-      }
-
-      setLoading(false);
-
-      const [summaryResult, leadsResult, usersResult] =
-        await Promise.allSettled([
-          api.get("/commissions/summary"),
-          api.get("/sales/leads", {
-            params: {
-              active_only: false,
-            },
-          }),
-          api.get("/users"),
-        ]);
-
-      if (summaryResult.status === "fulfilled") {
-        setSummary(summaryResult.value?.data || {});
-      } else {
-        setSummary({});
-        console.error(
-          "Commission summary loading error:",
-          summaryResult.reason
-        );
-      }
-
-      if (leadsResult.status === "fulfilled") {
-        setLeads(normalizeList(leadsResult.value?.data));
-      } else {
-        setLeads([]);
-        console.error("Sales leads loading error:", leadsResult.reason);
-      }
-
-      if (usersResult.status === "fulfilled") {
-        setUsers(normalizeList(usersResult.value?.data));
-      } else {
-        setUsers([]);
-        console.error("Users loading error:", usersResult.reason);
-      }
-    } catch (loadError) {
-      console.error("Commission data loading error:", loadError);
-
-      setCommissions([]);
-      setSummary({});
-
-      setError(
-        loadError?.response?.data?.detail ||
-          "Unable to load sales commission data."
-      );
-
-      setLoading(false);
-    }
   };
 
   useEffect(() => {
-    loadData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter]);
+    if (!notification.message) return undefined;
+
+    const timer = window.setTimeout(() => {
+      setNotification({
+        type: "",
+        message: "",
+      });
+    }, 4200);
+
+    return () => window.clearTimeout(timer);
+  }, [notification.message]);
 
   useEffect(() => {
-    const modalOpen =
-      Boolean(selectedCommission) ||
-      Boolean(commissionToDelete) ||
-      Boolean(paymentToDelete);
+    if (!deleteModal.open) return undefined;
 
-    if (!modalOpen) return undefined;
-
-    const previousOverflow = document.body.style.overflow;
+    const previousOverflow =
+      document.body.style.overflow;
 
     document.body.style.overflow = "hidden";
 
     const handleEscape = (event) => {
-      if (event.key !== "Escape") return;
-
-      if (paymentToDelete) {
-        setPaymentToDelete(null);
-        return;
+      if (
+        event.key === "Escape" &&
+        !deletingPaymentId
+      ) {
+        setDeleteModal({
+          open: false,
+          payment: null,
+        });
       }
-
-      if (commissionToDelete) {
-        setCommissionToDelete(null);
-        return;
-      }
-
-      setSelectedCommissionId(null);
     };
 
-    window.addEventListener("keydown", handleEscape);
+    window.addEventListener(
+      "keydown",
+      handleEscape
+    );
 
     return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", handleEscape);
+      document.body.style.overflow =
+        previousOverflow;
+
+      window.removeEventListener(
+        "keydown",
+        handleEscape
+      );
     };
-  }, [selectedCommission, commissionToDelete, paymentToDelete]);
+  }, [deleteModal.open, deletingPaymentId]);
 
-  const filteredCommissions = useMemo(() => {
-    const search = searchText.trim().toLowerCase();
+  const convertedLeads = useMemo(() => {
+    return leads.filter((lead) =>
+      PAYMENT_ALLOWED_LEAD_STATUSES.includes(
+        normalizeStatus(lead.status)
+      )
+    );
+  }, [leads]);
 
-    if (!search) return commissions;
+  const paymentsByLead = useMemo(() => {
+    const map = new Map();
 
-    return commissions.filter((commission) => {
-      const lead = leadMap.get(Number(commission.lead_id));
+    payments.forEach((payment) => {
+      if (
+        !payment.lead_id ||
+        payment.payment_type !== "lead_payment"
+      ) {
+        return;
+      }
 
-      const salesUser = userMap.get(
-        Number(
-          commission.sales_rep_user_id || lead?.sales_rep_user_id
-        )
+      const existing =
+        map.get(Number(payment.lead_id)) || [];
+
+      existing.push(payment);
+
+      map.set(
+        Number(payment.lead_id),
+        existing
+      );
+    });
+
+    return map;
+  }, [payments]);
+
+  const selectedLead = useMemo(() => {
+    if (!form.lead_id) return null;
+
+    return (
+      leads.find(
+        (lead) =>
+          Number(lead.id) ===
+          Number(form.lead_id)
+      ) || null
+    );
+  }, [form.lead_id, leads]);
+
+  const selectedLeadPaymentInfo =
+    useMemo(() => {
+      if (!selectedLead) {
+        return {
+          finalAmount: 0,
+          totalReceived: 0,
+          dueAmount: 0,
+        };
+      }
+
+      const leadPayments =
+        paymentsByLead.get(
+          Number(selectedLead.id)
+        ) || [];
+
+      const totalReceived = leadPayments.reduce(
+        (total, payment) =>
+          total +
+          Number(payment.amount || 0),
+        0
       );
 
-      const searchableText = [
-        commission.id,
-        commission.lead_id,
-        commission.status,
-        lead?.client_name,
-        lead?.company_name,
-        lead?.client_company_name,
-        lead?.business_name,
-        lead?.phone,
-        lead?.client_phone,
-        lead?.email,
-        lead?.client_email,
-        lead?.service_type,
-        lead?.software_type,
-        salesUser?.full_name,
-        salesUser?.name,
-        salesUser?.email,
+      const finalAmount = Number(
+        selectedLead.final_sale_amount || 0
+      );
+
+      const dueAmount = Math.max(
+        finalAmount - totalReceived,
+        0
+      );
+
+      return {
+        finalAmount,
+        totalReceived,
+        dueAmount,
+      };
+    }, [selectedLead, paymentsByLead]);
+
+  const localPaymentSummary = useMemo(() => {
+    const totalReceived = payments.reduce(
+      (total, payment) =>
+        total + Number(payment.amount || 0),
+      0
+    );
+
+    const totalLeadPayments = payments
+      .filter(
+        (payment) =>
+          payment.payment_type ===
+          "lead_payment"
+      )
+      .reduce(
+        (total, payment) =>
+          total +
+          Number(payment.amount || 0),
+        0
+      );
+
+    const totalOtherPayments = payments
+      .filter(
+        (payment) =>
+          payment.payment_type ===
+          "other_payment"
+      )
+      .reduce(
+        (total, payment) =>
+          total +
+          Number(payment.amount || 0),
+        0
+      );
+
+    let totalPendingDue = 0;
+
+    convertedLeads.forEach((lead) => {
+      const leadPayments =
+        paymentsByLead.get(
+          Number(lead.id)
+        ) || [];
+
+      const received = leadPayments.reduce(
+        (total, payment) =>
+          total +
+          Number(payment.amount || 0),
+        0
+      );
+
+      const finalAmount = Number(
+        lead.final_sale_amount || 0
+      );
+
+      if (finalAmount > received) {
+        totalPendingDue +=
+          finalAmount - received;
+      }
+    });
+
+    return {
+      total_received: totalReceived,
+      total_lead_payments:
+        totalLeadPayments,
+      total_other_payments:
+        totalOtherPayments,
+      total_pending_due_from_leads:
+        totalPendingDue,
+      total_payment_count: payments.length,
+
+      lead_payment_count: payments.filter(
+        (payment) =>
+          payment.payment_type ===
+          "lead_payment"
+      ).length,
+
+      other_payment_count: payments.filter(
+        (payment) =>
+          payment.payment_type ===
+          "other_payment"
+      ).length,
+    };
+  }, [
+    payments,
+    convertedLeads,
+    paymentsByLead,
+  ]);
+
+  const displayPaymentSummary = useMemo(() => {
+    return {
+      ...localPaymentSummary,
+      ...(paymentSummary || {}),
+    };
+  }, [localPaymentSummary, paymentSummary]);
+
+  const filteredPayments = useMemo(() => {
+    const search =
+      searchText.trim().toLowerCase();
+
+    return payments.filter((payment) => {
+      const searchTarget = [
+        payment.payment_title,
+        payment.payer_name,
+        payment.payer_phone,
+        payment.payer_email,
+        payment.payment_method,
+        payment.payment_type,
+        payment.reference_number,
+        payment.remarks,
+        payment.amount,
+        payment.lead_id,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
 
-      return searchableText.includes(search);
+      const searchMatch = search
+        ? searchTarget.includes(search)
+        : true;
+
+      const typeMatch = paymentTypeFilter
+        ? payment.payment_type ===
+          paymentTypeFilter
+        : true;
+
+      const methodMatch = methodFilter
+        ? payment.payment_method ===
+          methodFilter
+        : true;
+
+      return (
+        searchMatch &&
+        typeMatch &&
+        methodMatch
+      );
     });
-  }, [commissions, leadMap, searchText, userMap]);
+  }, [
+    payments,
+    searchText,
+    paymentTypeFilter,
+    methodFilter,
+  ]);
 
-  const calculatedSummary = useMemo(() => {
-    if (summary && Object.keys(summary).length > 0) {
-      return summary;
+  const fetchLeads = async () => {
+    try {
+      const response = await api.get(
+        "/sales/leads"
+      );
+
+      setLeads(
+        Array.isArray(response.data)
+          ? response.data
+          : []
+      );
+    } catch (error) {
+      showNotification(
+        "error",
+        getErrorMessage(
+          error,
+          "Failed to load leads"
+        )
+      );
     }
-
-    const totalCommissionAmount = commissions.reduce(
-      (total, commission) =>
-        total + Number(commission.commission_amount || 0),
-      0
-    );
-
-    const totalPaidAmount = commissions.reduce(
-      (total, commission) =>
-        total + Number(commission.paid_amount || 0),
-      0
-    );
-
-    return {
-      total_commissions: commissions.length,
-
-      pending_count: commissions.filter(
-        (commission) =>
-          String(commission.status).toLowerCase() === "pending"
-      ).length,
-
-      partial_count: commissions.filter(
-        (commission) =>
-          String(commission.status).toLowerCase() === "partial"
-      ).length,
-
-      paid_count: commissions.filter(
-        (commission) =>
-          String(commission.status).toLowerCase() === "paid"
-      ).length,
-
-      total_commission_amount: totalCommissionAmount,
-      total_paid_amount: totalPaidAmount,
-      total_due_amount: Math.max(
-        totalCommissionAmount - totalPaidAmount,
-        0
-      ),
-    };
-  }, [commissions, summary]);
-
-  const getLead = (commission) => {
-    return leadMap.get(Number(commission?.lead_id));
   };
 
-  const getClientName = (commission) => {
-    const lead = getLead(commission);
+  const fetchPayments = async () => {
+    try {
+      const response = await api.get(
+        "/sales/payments"
+      );
 
-    return lead?.client_name || `Lead #${commission?.lead_id || "-"}`;
-  };
-
-  const getCompanyName = (commission) => {
-    const lead = getLead(commission);
-
-    return (
-      lead?.company_name ||
-      lead?.client_company_name ||
-      lead?.business_name ||
-      "-"
-    );
-  };
-
-  const getClientPhone = (commission) => {
-    const lead = getLead(commission);
-
-    return lead?.phone || lead?.client_phone || "-";
-  };
-
-  const getClientEmail = (commission) => {
-    const lead = getLead(commission);
-
-    return lead?.email || lead?.client_email || "-";
-  };
-
-  const getServiceType = (commission) => {
-    const lead = getLead(commission);
-
-    return (
-      lead?.service_type ||
-      lead?.software_type ||
-      lead?.product_name ||
-      "Not specified"
-    );
-  };
-
-  const getClientSubtitle = (commission) => {
-    const companyName = getCompanyName(commission);
-
-    if (companyName !== "-") return companyName;
-
-    const phone = getClientPhone(commission);
-
-    if (phone !== "-") return phone;
-
-    const email = getClientEmail(commission);
-
-    if (email !== "-") return email;
-
-    return "No contact details";
-  };
-
-  const getSalesRepName = (commission) => {
-    const lead = getLead(commission);
-
-    const salesRepId =
-      commission?.sales_rep_user_id || lead?.sales_rep_user_id;
-
-    const salesUser = userMap.get(Number(salesRepId));
-
-    return (
-      salesUser?.full_name ||
-      salesUser?.name ||
-      salesUser?.username ||
-      salesUser?.email ||
-      (salesRepId ? `User #${salesRepId}` : "Not assigned")
-    );
-  };
-
-  const updatePercentageInput = (commissionId, value) => {
-    setPercentageInputs((previous) => ({
-      ...previous,
-      [commissionId]: value,
-    }));
-  };
-
-  const updatePaymentInput = (commissionId, field, value) => {
-    setPaymentInputs((previous) => ({
-      ...previous,
-      [commissionId]: {
-        amount: "",
-        payment_method: "cash",
-        payment_date: "",
-        remarks: "",
-        ...(previous[commissionId] || {}),
-        [field]: value,
-      },
-    }));
-  };
-
-  const getPaymentInput = (commissionId) => {
-    return (
-      paymentInputs[commissionId] || {
-        amount: "",
-        payment_method: "cash",
-        payment_date: "",
-        remarks: "",
-      }
-    );
-  };
-
-  const showError = (message) => {
-    setSuccess("");
-    setError(message);
-  };
-
-  const showSuccess = (message) => {
-    setError("");
-    setSuccess(message);
-  };
-
-  const handleUpdatePercentage = async (commission) => {
-    if (!isAdminUser) return;
-
-    setError("");
-    setSuccess("");
-
-    const commissionPercentage = Number(
-      percentageInputs[commission.id] || 0
-    );
-
-    if (
-      !Number.isFinite(commissionPercentage) ||
-      commissionPercentage < 0
-    ) {
-      showError("Commission percentage cannot be negative.");
-      return;
+      setPayments(
+        Array.isArray(response.data)
+          ? response.data
+          : []
+      );
+    } catch (error) {
+      showNotification(
+        "error",
+        getErrorMessage(
+          error,
+          "Failed to load received payments"
+        )
+      );
     }
+  };
 
-    if (commissionPercentage > 100) {
-      showError("Commission percentage cannot be greater than 100%.");
-      return;
+  const fetchPaymentSummary = async () => {
+    try {
+      const response = await api.get(
+        "/sales/payments/summary"
+      );
+
+      setPaymentSummary(
+        response.data || null
+      );
+    } catch (error) {
+      console.error(
+        "Payment summary loading error:",
+        error
+      );
     }
+  };
 
-    setSavingPercentageId(commission.id);
+  const fetchAll = async () => {
+    if (!canUsePaymentPage) return;
 
     try {
-      await api.put(`/commissions/${commission.id}/percentage`, {
-        commission_percentage: commissionPercentage,
+      setLoading(true);
+
+      await Promise.all([
+        fetchLeads(),
+        fetchPayments(),
+        fetchPaymentSummary(),
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canUsePaymentPage]);
+
+  const handleFormChange = (event) => {
+    const { name, value } = event.target;
+
+    if (name === "payment_type") {
+      if (
+        value === "other_payment" &&
+        !isAdminUser
+      ) {
+        showNotification(
+          "error",
+          "Only admin can add other payment"
+        );
+
+        return;
+      }
+
+      setForm({
+        ...getEmptyPaymentForm(),
+        payment_type: value,
       });
 
-      showSuccess("Commission percentage updated successfully.");
-
-      await loadData();
-    } catch (updateError) {
-      console.error("Commission percentage update error:", updateError);
-
-      showError(
-        updateError?.response?.data?.detail ||
-          "Unable to update commission percentage."
-      );
-    } finally {
-      setSavingPercentageId(null);
+      return;
     }
+
+    if (name === "lead_id") {
+      const lead = leads.find(
+        (item) =>
+          Number(item.id) === Number(value)
+      );
+
+      setForm((previous) => ({
+        ...previous,
+        lead_id: value,
+
+        payment_title: lead
+          ? `Payment from ${lead.client_name}`
+          : "",
+
+        payer_name:
+          lead?.client_name || "",
+
+        payer_phone:
+          lead?.client_phone ||
+          lead?.phone ||
+          "",
+
+        payer_email:
+          lead?.client_email ||
+          lead?.email ||
+          "",
+      }));
+
+      return;
+    }
+
+    setForm((previous) => ({
+      ...previous,
+      [name]: value,
+    }));
   };
 
-  const handleAddPayment = async (commission) => {
-    if (!isAdminUser) return;
+  const resetForm = () => {
+    setForm(getEmptyPaymentForm());
+  };
 
-    setError("");
-    setSuccess("");
+  const handleSubmitPayment = async (
+    event
+  ) => {
+    event.preventDefault();
 
-    const paymentForm = getPaymentInput(commission.id);
+    const amount = Number(form.amount);
 
-    const paymentAmount = Number(paymentForm.amount || 0);
-    const dueAmount = Number(commission.due_amount || 0);
-
-    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
-      showError("Enter a valid payment amount.");
-      return;
-    }
-
-    if (paymentAmount > dueAmount) {
-      showError(
-        `Payment amount cannot be greater than due amount ${formatCurrency(
-          dueAmount
-        )}.`
+    if (
+      form.payment_type ===
+        "lead_payment" &&
+      !form.lead_id
+    ) {
+      showNotification(
+        "error",
+        "Please choose a converted lead"
       );
 
       return;
     }
 
-    setPayingId(commission.id);
+    if (
+      form.payment_type ===
+        "other_payment" &&
+      !isAdminUser
+    ) {
+      showNotification(
+        "error",
+        "Only admin can add other payment"
+      );
+
+      return;
+    }
+
+    if (
+      !amount ||
+      Number.isNaN(amount) ||
+      amount <= 0
+    ) {
+      showNotification(
+        "error",
+        "Payment amount must be greater than 0"
+      );
+
+      return;
+    }
 
     try {
+      setSaving(true);
+
       const payload = {
-        amount: paymentAmount,
-        payment_method: paymentForm.payment_method || "cash",
-        remarks: paymentForm.remarks?.trim() || null,
+        lead_id:
+          form.payment_type ===
+            "lead_payment" &&
+          form.lead_id
+            ? Number(form.lead_id)
+            : null,
+
+        payment_type: form.payment_type,
+
+        payment_title:
+          form.payment_title.trim() ||
+          (form.payment_type ===
+          "lead_payment"
+            ? `Payment from ${
+                selectedLead?.client_name ||
+                "Client"
+              }`
+            : "Other payment"),
+
+        payer_name:
+          form.payer_name.trim() ||
+          (form.payment_type ===
+          "lead_payment"
+            ? selectedLead?.client_name ||
+              "Client"
+            : "Other payer"),
+
+        payer_phone:
+          form.payer_phone.trim() || null,
+
+        payer_email:
+          form.payer_email.trim() || null,
+
+        amount,
+
+        payment_method:
+          form.payment_method || "upi",
+
+        payment_date:
+          form.payment_date ||
+          getTodayDate(),
+
+        reference_number:
+          form.reference_number.trim() ||
+          null,
+
+        remarks:
+          form.remarks.trim() || null,
       };
 
-      if (paymentForm.payment_date) {
-        payload.payment_date = paymentForm.payment_date;
-      }
-
       await api.post(
-        `/commissions/${commission.id}/payments`,
+        "/sales/payments",
         payload
       );
 
-      setPaymentInputs((previous) => ({
-        ...previous,
-        [commission.id]: {
-          amount: "",
-          payment_method: "cash",
-          payment_date: "",
-          remarks: "",
-        },
-      }));
+      resetForm();
 
-      showSuccess("Commission payment added successfully.");
+      await fetchAll();
 
-      await loadData();
-    } catch (paymentError) {
-      console.error("Commission payment error:", paymentError);
-
-      showError(
-        paymentError?.response?.data?.detail ||
-          "Unable to add commission payment."
+      showNotification(
+        "success",
+        "Received payment saved successfully"
+      );
+    } catch (error) {
+      showNotification(
+        "error",
+        getErrorMessage(
+          error,
+          "Failed to save received payment"
+        )
       );
     } finally {
-      setPayingId(null);
+      setSaving(false);
     }
   };
 
-  const handleDeletePayment = async () => {
-    if (!isAdminUser || !paymentToDelete?.id) return;
-
-    setError("");
-    setSuccess("");
-    setDeletingPaymentId(paymentToDelete.id);
-
-    try {
-      await api.delete(
-        `/commissions/payments/${paymentToDelete.id}`
+  const openDeleteModal = (payment) => {
+    if (!isAdminUser) {
+      showNotification(
+        "error",
+        "Only admin can delete received payment"
       );
 
-      setPaymentToDelete(null);
+      return;
+    }
 
-      showSuccess("Commission payment deleted successfully.");
+    setDeleteModal({
+      open: true,
+      payment,
+    });
+  };
 
-      await loadData();
-    } catch (deleteError) {
-      console.error("Commission payment deletion error:", deleteError);
+  const closeDeleteModal = () => {
+    if (deletingPaymentId) return;
 
-      showError(
-        deleteError?.response?.data?.detail ||
-          "Unable to delete commission payment."
+    setDeleteModal({
+      open: false,
+      payment: null,
+    });
+  };
+
+  const handleDeletePayment = async () => {
+    const payment = deleteModal.payment;
+
+    if (!payment) return;
+
+    try {
+      setDeletingPaymentId(payment.id);
+
+      await api.delete(
+        `/sales/payments/${payment.id}`
+      );
+
+      setDeleteModal({
+        open: false,
+        payment: null,
+      });
+
+      await fetchAll();
+
+      showNotification(
+        "success",
+        "Payment deleted successfully. You can now delete the wrong sales lead."
+      );
+    } catch (error) {
+      showNotification(
+        "error",
+        getErrorMessage(
+          error,
+          "Failed to delete received payment"
+        )
       );
     } finally {
       setDeletingPaymentId(null);
     }
   };
 
-  const handleDeleteCommission = async () => {
-    if (!isAdminUser || !commissionToDelete?.id) return;
-
-    setError("");
-    setSuccess("");
-    setDeletingCommissionId(commissionToDelete.id);
-
-    try {
-      await api.delete(`/commissions/${commissionToDelete.id}`);
-
-      if (
-        Number(selectedCommissionId) ===
-        Number(commissionToDelete.id)
-      ) {
-        setSelectedCommissionId(null);
-      }
-
-      setCommissionToDelete(null);
-
-      showSuccess("Commission record deleted successfully.");
-
-      await loadData();
-    } catch (deleteError) {
-      console.error("Commission deletion error:", deleteError);
-
-      showError(
-        deleteError?.response?.data?.detail ||
-          "Unable to delete commission record."
-      );
-    } finally {
-      setDeletingCommissionId(null);
-    }
+  const clearFilters = () => {
+    setSearchText("");
+    setPaymentTypeFilter("");
+    setMethodFilter("");
   };
 
-  const closeCommissionDetails = () => {
-    if (
-      savingPercentageId ||
-      payingId ||
-      deletingPaymentId ||
-      deletingCommissionId
-    ) {
-      return;
-    }
-
-    setSelectedCommissionId(null);
-  };
-
-  const renderCommissionDetails = (commission) => {
-    if (!commission) return null;
-
-    const paymentForm = getPaymentInput(commission.id);
-
-    const payments = Array.isArray(commission.payments)
-      ? [...commission.payments].sort((first, second) => {
-          const firstDate = new Date(
-            first.payment_date || first.created_at || 0
-          ).getTime();
-
-          const secondDate = new Date(
-            second.payment_date || second.created_at || 0
-          ).getTime();
-
-          return secondDate - firstDate;
-        })
-      : [];
-
-    const currentPercentage = Number(
-      percentageInputs[commission.id] || 0
-    );
-
-    const previewCommissionAmount =
-      (Number(commission.sale_amount || 0) * currentPercentage) / 100;
-
-    const dueAmount = Number(commission.due_amount || 0);
-
-    const isPaid =
-      String(commission.status).toLowerCase() === "paid";
-
-    const disablePayment =
-      !isAdminUser || dueAmount <= 0 || isPaid;
-
+  if (!canUsePaymentPage) {
     return (
-      <div
-        className="commission-modal-backdrop"
-        onMouseDown={closeCommissionDetails}
-      >
-        <section
-          className="commission-detail-modal"
-          onMouseDown={stopPropagation}
-        >
-          <header className="commission-modal-header">
-            <div className="commission-modal-heading">
-              <div className="commission-modal-icon">
-                <Percent size={21} />
+      <>
+        <style>{receivePaymentStyles}</style>
+
+        <div className="receive-payment-page">
+          <section className="payment-page-header">
+            <div className="payment-title-wrap">
+              <button
+                type="button"
+                className="payment-back-button"
+                onClick={() => navigate(-1)}
+              >
+                <ArrowLeft size={18} />
+              </button>
+
+              <div className="payment-title-icon">
+                <WalletCards size={21} />
               </div>
 
               <div>
-                <div className="modal-heading-line">
-                  <h2>{getClientName(commission)}</h2>
-
-                  <span
-                    className={`commission-status ${getStatusClass(
-                      commission.status
-                    )}`}
-                  >
-                    {getStatusLabel(commission.status)}
-                  </span>
-                </div>
+                <h1>
+                  Payment Access Required
+                </h1>
 
                 <p>
-                  Commission #{commission.id} · Lead #
-                  {commission.lead_id}
+                  You do not have access to the
+                  Receive Payment module.
                 </p>
               </div>
             </div>
+          </section>
 
-            <button
-              type="button"
-              className="modal-close-btn"
-              onClick={closeCommissionDetails}
-              aria-label="Close commission details"
-            >
-              <X size={18} />
-            </button>
-          </header>
+          <div className="payment-empty-state access-empty-state">
+            <WalletCards size={34} />
 
-          <div className="commission-modal-body">
-            <section className="detail-section">
-              <div className="detail-section-header">
-                <div>
-                  <h3>Lead and customer details</h3>
-                  <p>
-                    Complete information connected to this commission.
-                  </p>
-                </div>
-              </div>
+            <h3>No Payment Access</h3>
 
-              <div className="client-detail-grid">
-                <div className="client-detail-item">
-                  <UserRound size={17} />
-
-                  <div>
-                    <span>Client name</span>
-                    <strong>{getClientName(commission)}</strong>
-                  </div>
-                </div>
-
-                <div className="client-detail-item">
-                  <Building2 size={17} />
-
-                  <div>
-                    <span>Company</span>
-                    <strong>{getCompanyName(commission)}</strong>
-                  </div>
-                </div>
-
-                <div className="client-detail-item">
-                  <Phone size={17} />
-
-                  <div>
-                    <span>Phone</span>
-                    <strong>{getClientPhone(commission)}</strong>
-                  </div>
-                </div>
-
-                <div className="client-detail-item">
-                  <Mail size={17} />
-
-                  <div>
-                    <span>Email</span>
-                    <strong>{getClientEmail(commission)}</strong>
-                  </div>
-                </div>
-
-                <div className="client-detail-item">
-                  <WalletCards size={17} />
-
-                  <div>
-                    <span>Software / service</span>
-                    <strong>{getServiceType(commission)}</strong>
-                  </div>
-                </div>
-
-                <div className="client-detail-item">
-                  <UserRound size={17} />
-
-                  <div>
-                    <span>Sales user</span>
-                    <strong>{getSalesRepName(commission)}</strong>
-                  </div>
-                </div>
-
-                <div className="client-detail-item">
-                  <CalendarDays size={17} />
-
-                  <div>
-                    <span>Created</span>
-                    <strong>
-                      {formatDateTime(commission.created_at)}
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="client-detail-item">
-                  <Clock3 size={17} />
-
-                  <div>
-                    <span>Last updated</span>
-                    <strong>
-                      {formatDateTime(
-                        commission.updated_at ||
-                          commission.created_at
-                      )}
-                    </strong>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section className="detail-section">
-              <div className="detail-section-header">
-                <div>
-                  <h3>Commission summary</h3>
-                  <p>
-                    Sale value, commission, paid amount and pending
-                    amount.
-                  </p>
-                </div>
-              </div>
-
-              <div className="modal-value-grid">
-                <article>
-                  <span>Sale amount</span>
-                  <strong>
-                    {formatCurrency(commission.sale_amount)}
-                  </strong>
-                </article>
-
-                <article>
-                  <span>Commission percentage</span>
-                  <strong>
-                    {Number(
-                      commission.commission_percentage || 0
-                    )}
-                    %
-                  </strong>
-                </article>
-
-                <article>
-                  <span>Total commission</span>
-                  <strong>
-                    {formatCurrency(commission.commission_amount)}
-                  </strong>
-                </article>
-
-                <article className="paid-value-card">
-                  <span>Commission paid</span>
-                  <strong>
-                    {formatCurrency(commission.paid_amount)}
-                  </strong>
-                </article>
-
-                <article className="due-value-card">
-                  <span>Commission due</span>
-                  <strong>
-                    {formatCurrency(commission.due_amount)}
-                  </strong>
-                </article>
-              </div>
-            </section>
-
-            {isAdminUser && (
-              <section className="detail-section">
-                <div className="detail-section-header">
-                  <div>
-                    <h3>Set commission percentage</h3>
-                    <p>
-                      Changing the percentage recalculates the
-                      commission amount.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="modal-percentage-row">
-                  <div className="modal-input-group">
-                    <label
-                      htmlFor={`percentage-${commission.id}`}
-                    >
-                      Commission percentage
-                    </label>
-
-                    <div className="input-with-symbol">
-                      <Percent size={16} />
-
-                      <input
-                        id={`percentage-${commission.id}`}
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.01"
-                        value={
-                          percentageInputs[commission.id] ?? "0"
-                        }
-                        onChange={(event) =>
-                          updatePercentageInput(
-                            commission.id,
-                            event.target.value
-                          )
-                        }
-                      />
-                    </div>
-                  </div>
-
-                  <div className="commission-preview-box">
-                    <span>Calculated commission</span>
-
-                    <strong>
-                      {formatCurrency(previewCommissionAmount)}
-                    </strong>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="primary-modal-btn"
-                    onClick={() =>
-                      handleUpdatePercentage(commission)
-                    }
-                    disabled={
-                      savingPercentageId === commission.id
-                    }
-                  >
-                    <Save size={16} />
-
-                    {savingPercentageId === commission.id
-                      ? "Saving..."
-                      : "Save Percentage"}
-                  </button>
-                </div>
-              </section>
-            )}
-
-            {isAdminUser && (
-              <section className="detail-section">
-                <div className="detail-section-header">
-                  <div>
-                    <h3>Pay commission</h3>
-                    <p>
-                      Add full or partial commission payments for the
-                      sales user.
-                    </p>
-                  </div>
-
-                  <span className="section-due-label">
-                    Due: {formatCurrency(dueAmount)}
-                  </span>
-                </div>
-
-                {isPaid ? (
-                  <div className="commission-paid-message">
-                    <CheckCircle2 size={20} />
-
-                    <div>
-                      <strong>Commission fully paid</strong>
-
-                      <span>
-                        No additional payment is required.
-                      </span>
-                    </div>
-                  </div>
-                ) : dueAmount <= 0 ? (
-                  <div className="commission-paid-message">
-                    <CheckCircle2 size={20} />
-
-                    <div>
-                      <strong>No commission amount is due</strong>
-
-                      <span>
-                        Set a commission percentage before adding
-                        payment.
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="modal-payment-grid">
-                      <div className="modal-input-group">
-                        <label
-                          htmlFor={`payment-amount-${commission.id}`}
-                        >
-                          Payment amount
-                        </label>
-
-                        <div className="input-with-symbol">
-                          <IndianRupee size={16} />
-
-                          <input
-                            id={`payment-amount-${commission.id}`}
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            placeholder="Enter amount"
-                            value={paymentForm.amount}
-                            onChange={(event) =>
-                              updatePaymentInput(
-                                commission.id,
-                                "amount",
-                                event.target.value
-                              )
-                            }
-                            disabled={disablePayment}
-                          />
-                        </div>
-                      </div>
-
-                      <div className="modal-input-group">
-                        <label
-                          htmlFor={`payment-method-${commission.id}`}
-                        >
-                          Payment method
-                        </label>
-
-                        <select
-                          id={`payment-method-${commission.id}`}
-                          value={paymentForm.payment_method}
-                          onChange={(event) =>
-                            updatePaymentInput(
-                              commission.id,
-                              "payment_method",
-                              event.target.value
-                            )
-                          }
-                          disabled={disablePayment}
-                        >
-                          {PAYMENT_METHODS.map((method) => (
-                            <option
-                              key={method.value}
-                              value={method.value}
-                            >
-                              {method.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="modal-input-group">
-                        <label
-                          htmlFor={`payment-date-${commission.id}`}
-                        >
-                          Payment date
-                        </label>
-
-                        <input
-                          id={`payment-date-${commission.id}`}
-                          type="date"
-                          value={paymentForm.payment_date}
-                          onChange={(event) =>
-                            updatePaymentInput(
-                              commission.id,
-                              "payment_date",
-                              event.target.value
-                            )
-                          }
-                          disabled={disablePayment}
-                        />
-                      </div>
-
-                      <div className="modal-input-group modal-remarks-field">
-                        <label
-                          htmlFor={`payment-remarks-${commission.id}`}
-                        >
-                          Remarks
-                        </label>
-
-                        <input
-                          id={`payment-remarks-${commission.id}`}
-                          type="text"
-                          placeholder="Optional payment remarks"
-                          value={paymentForm.remarks}
-                          onChange={(event) =>
-                            updatePaymentInput(
-                              commission.id,
-                              "remarks",
-                              event.target.value
-                            )
-                          }
-                          disabled={disablePayment}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="payment-action-row">
-                      <button
-                        type="button"
-                        className="payment-submit-btn"
-                        onClick={() =>
-                          handleAddPayment(commission)
-                        }
-                        disabled={
-                          disablePayment ||
-                          payingId === commission.id
-                        }
-                      >
-                        <IndianRupee size={16} />
-
-                        {payingId === commission.id
-                          ? "Adding Payment..."
-                          : "Add Commission Payment"}
-                      </button>
-                    </div>
-                  </>
-                )}
-              </section>
-            )}
-
-            <section className="detail-section">
-              <div className="detail-section-header">
-                <div>
-                  <h3>Payment history</h3>
-                  <p>
-                    All full and partial payments made for this
-                    commission.
-                  </p>
-                </div>
-
-                <span className="payment-count-badge">
-                  {payments.length}{" "}
-                  {payments.length === 1 ? "Payment" : "Payments"}
-                </span>
-              </div>
-
-              {payments.length === 0 ? (
-                <div className="modal-empty-state">
-                  <WalletCards size={23} />
-
-                  <strong>No payment added</strong>
-
-                  <span>
-                    Commission payment history will appear here.
-                  </span>
-                </div>
-              ) : (
-                <div className="modal-payment-history">
-                  {payments.map((payment) => (
-                    <article
-                      className="modal-payment-history-item"
-                      key={payment.id}
-                    >
-                      <div className="payment-history-main">
-                        <div className="payment-history-icon">
-                          <IndianRupee size={17} />
-                        </div>
-
-                        <div>
-                          <strong>
-                            {formatCurrency(payment.amount)}
-                          </strong>
-
-                          <span>
-                            {formatDate(
-                              payment.payment_date ||
-                                payment.created_at
-                            )}{" "}
-                            ·{" "}
-                            {getPaymentMethodLabel(
-                              payment.payment_method
-                            )}
-                          </span>
-
-                          {payment.remarks && (
-                            <p>{payment.remarks}</p>
-                          )}
-                        </div>
-                      </div>
-
-                      {isAdminUser && (
-                        <button
-                          type="button"
-                          className="payment-delete-btn"
-                          onClick={() =>
-                            setPaymentToDelete({
-                              ...payment,
-                              commission_id: commission.id,
-                              client_name:
-                                getClientName(commission),
-                            })
-                          }
-                          disabled={
-                            deletingPaymentId === payment.id
-                          }
-                        >
-                          <Trash2 size={15} />
-                          Delete
-                        </button>
-                      )}
-                    </article>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {isAdminUser && (
-              <section className="commission-danger-section">
-                <div>
-                  <h3>Delete commission record</h3>
-
-                  <p>
-                    This removes the commission and its payment
-                    history.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  className="danger-delete-btn"
-                  onClick={() =>
-                    setCommissionToDelete(commission)
-                  }
-                >
-                  <Trash2 size={16} />
-                  Delete Commission
-                </button>
-              </section>
-            )}
+            <p>
+              Contact Company Admin to enable
+              Receive Payment access.
+            </p>
           </div>
-        </section>
-      </div>
+        </div>
+      </>
     );
-  };
+  }
 
   return (
     <>
-      <style>{commissionStyles}</style>
+      <style>{receivePaymentStyles}</style>
 
-      <div className="commission-page">
-        <section className="commission-header-card">
-          <div className="commission-header-left">
+      <div className="receive-payment-page">
+        <section className="payment-page-header">
+          <div className="payment-title-wrap">
             <button
               type="button"
-              className="commission-back-button"
+              className="payment-back-button"
               onClick={() => navigate(-1)}
               aria-label="Go back"
-              title="Back"
             >
               <ArrowLeft size={18} />
             </button>
 
-            <div className="commission-header-icon">
-              <Percent size={21} />
+            <div className="payment-title-icon">
+              <WalletCards size={21} />
             </div>
 
             <div>
-              <h1>Sales Commission</h1>
+              <h1>Receive Payment</h1>
 
               <p>
-                Manage commission percentages, payments and payment
-                history.
+                Record payments from sales leads
+                or other company income.
               </p>
             </div>
           </div>
 
-          <span className="record-count">
-            {formatNumber(
-              calculatedSummary.total_commissions || 0
-            )}{" "}
-            Records
+          <span className="payment-count-pill">
+            {loading
+              ? "Loading..."
+              : `${filteredPayments.length} Payments`}
           </span>
         </section>
 
-        {error && (
-          <div className="commission-alert error-alert">
-            <AlertCircle size={17} />
+        {notification.message && (
+          <div
+            className={`payment-notification ${
+              notification.type === "success"
+                ? "success"
+                : "error"
+            }`}
+          >
+            {notification.type ===
+            "success" ? (
+              <CheckCircle2 size={18} />
+            ) : (
+              <XCircle size={18} />
+            )}
 
-            <span>{error}</span>
-
-            <button
-              type="button"
-              onClick={() => setError("")}
-              aria-label="Close error"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        )}
-
-        {success && (
-          <div className="commission-alert success-alert">
-            <CheckCircle2 size={17} />
-
-            <span>{success}</span>
+            <span>
+              {notification.message}
+            </span>
 
             <button
               type="button"
-              onClick={() => setSuccess("")}
-              aria-label="Close success message"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        )}
-
-        <section className="commission-summary-grid">
-          <article className="commission-summary-card">
-            <p>Pending</p>
-
-            <strong>
-              {formatNumber(calculatedSummary.pending_count)}
-            </strong>
-
-            <span>Waiting for payment</span>
-          </article>
-
-          <article className="commission-summary-card">
-            <p>Partial paid</p>
-
-            <strong>
-              {formatNumber(calculatedSummary.partial_count)}
-            </strong>
-
-            <span>Some amount paid</span>
-          </article>
-
-          <article className="commission-summary-card">
-            <p>Paid</p>
-
-            <strong>
-              {formatNumber(calculatedSummary.paid_count)}
-            </strong>
-
-            <span>Fully settled</span>
-          </article>
-
-          <article className="commission-summary-card">
-            <p>Total commission</p>
-
-            <strong>
-              {formatCurrency(
-                calculatedSummary.total_commission_amount
-              )}
-            </strong>
-
-            <span>Complete commission value</span>
-          </article>
-
-          <article className="commission-summary-card">
-            <p>Total paid</p>
-
-            <strong>
-              {formatCurrency(
-                calculatedSummary.total_paid_amount
-              )}
-            </strong>
-
-            <span>Commission already paid</span>
-          </article>
-
-          <article className="commission-summary-card">
-            <p>Total due</p>
-
-            <strong>
-              {formatCurrency(
-                calculatedSummary.total_due_amount
-              )}
-            </strong>
-
-            <span>Pending commission payout</span>
-          </article>
-        </section>
-
-        <section className="commission-filter-card">
-          <div className="search-box">
-            <Search size={17} />
-
-            <input
-              type="text"
-              placeholder="Search client, lead, company or sales user..."
-              value={searchText}
-              onChange={(event) =>
-                setSearchText(event.target.value)
+              onClick={() =>
+                setNotification({
+                  type: "",
+                  message: "",
+                })
               }
-            />
+            >
+              <X size={15} />
+            </button>
           </div>
+        )}
 
-          <select
-            value={statusFilter}
-            onChange={(event) =>
-              setStatusFilter(event.target.value)
-            }
-          >
-            <option value="all">All Status</option>
-            <option value="pending">Pending</option>
-            <option value="partial">Partial Paid</option>
-            <option value="paid">Paid</option>
-          </select>
+        <section className="payment-summary-grid">
+          <article className="payment-summary-card">
+            <div className="summary-icon green">
+              <IndianRupee size={20} />
+            </div>
 
-          <button
-            type="button"
-            className="clear-btn"
-            onClick={() => {
-              setSearchText("");
-              setStatusFilter("all");
-            }}
-          >
-            Clear
-          </button>
-        </section>
-
-        <section className="commission-list-section">
-          <div className="commission-list-header">
             <div>
-              <h2>Commission List</h2>
+              <span>Total Received</span>
+
+              <strong>
+                {formatCurrency(
+                  displayPaymentSummary.total_received ||
+                    0
+                )}
+              </strong>
 
               <p>
-                {filteredCommissions.length}{" "}
-                {filteredCommissions.length === 1
-                  ? "commission record found"
-                  : "commission records found"}
+                {displayPaymentSummary.total_payment_count ||
+                  0}{" "}
+                payment records
               </p>
+            </div>
+          </article>
+
+          <article className="payment-summary-card">
+            <div className="summary-icon blue">
+              <ReceiptText size={20} />
+            </div>
+
+            <div>
+              <span>Lead Payments</span>
+
+              <strong>
+                {formatCurrency(
+                  displayPaymentSummary.total_lead_payments ||
+                    0
+                )}
+              </strong>
+
+              <p>
+                {displayPaymentSummary.lead_payment_count ||
+                  0}{" "}
+                lead payments
+              </p>
+            </div>
+          </article>
+
+          <article className="payment-summary-card">
+            <div className="summary-icon purple">
+              <Banknote size={20} />
+            </div>
+
+            <div>
+              <span>Other Payments</span>
+
+              <strong>
+                {formatCurrency(
+                  displayPaymentSummary.total_other_payments ||
+                    0
+                )}
+              </strong>
+
+              <p>
+                {displayPaymentSummary.other_payment_count ||
+                  0}{" "}
+                other payments
+              </p>
+            </div>
+          </article>
+
+          <article className="payment-summary-card">
+            <div className="summary-icon orange">
+              <CreditCard size={20} />
+            </div>
+
+            <div>
+              <span>Pending Due</span>
+
+              <strong>
+                {formatCurrency(
+                  displayPaymentSummary.total_pending_due_from_leads ||
+                    0
+                )}
+              </strong>
+
+              <p>From converted leads</p>
+            </div>
+          </article>
+        </section>
+
+        <section className="payment-entry-section">
+          <div className="payment-section-header">
+            <div className="payment-section-title">
+              <div className="payment-section-icon">
+                <PlusCircle size={19} />
+              </div>
+
+              <div>
+                <h2>Add Received Payment</h2>
+
+                <p>
+                  Choose a lead payment or other
+                  payment.
+                </p>
+              </div>
             </div>
           </div>
 
-          {loading ? (
-            <div className="commission-empty">
-              <Clock3 size={25} />
+          <form
+            className="payment-entry-form"
+            onSubmit={handleSubmitPayment}
+          >
+            <div className="payment-type-switch">
+              {PAYMENT_TYPE_OPTIONS.map(
+                (option) => {
+                  const disabled =
+                    option.value ===
+                      "other_payment" &&
+                    !isAdminUser;
 
-              <strong>Loading commission records...</strong>
-            </div>
-          ) : filteredCommissions.length === 0 ? (
-            <div className="commission-empty">
-              <Percent size={25} />
-
-              <strong>No commission records found</strong>
-
-              <span>
-                Convert a software sale to automatically create
-                commission.
-              </span>
-            </div>
-          ) : (
-            <div className="commission-grid">
-              {filteredCommissions.map((commission) => (
-                <article
-                  className="commission-card"
-                  key={commission.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() =>
-                    setSelectedCommissionId(commission.id)
-                  }
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === "Enter" ||
-                      event.key === " "
-                    ) {
-                      event.preventDefault();
-                      setSelectedCommissionId(commission.id);
-                    }
-                  }}
-                >
-                  <div className="commission-card-top">
-                    <div className="commission-card-id">
-                      <div className="commission-icon">
-                        <Percent size={16} />
-                      </div>
-
-                      <span>#{commission.id}</span>
-                    </div>
-
-                    <span
-                      className={`commission-status ${getStatusClass(
-                        commission.status
-                      )}`}
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      disabled={disabled}
+                      className={
+                        form.payment_type ===
+                        option.value
+                          ? "active"
+                          : ""
+                      }
+                      onClick={() =>
+                        handleFormChange({
+                          target: {
+                            name: "payment_type",
+                            value: option.value,
+                          },
+                        })
+                      }
                     >
-                      {getStatusLabel(commission.status)}
-                    </span>
+                      {option.label}
+
+                      {disabled
+                        ? " Admin Only"
+                        : ""}
+                    </button>
+                  );
+                }
+              )}
+            </div>
+
+            <div className="payment-form-grid">
+              {form.payment_type ===
+                "lead_payment" && (
+                <>
+                  <div className="payment-form-group lead-select-field">
+                    <label>
+                      Choose Converted Lead *
+                    </label>
+
+                    <select
+                      name="lead_id"
+                      value={form.lead_id}
+                      onChange={handleFormChange}
+                      required
+                    >
+                      <option value="">
+                        Select converted /
+                        delivered / completed lead
+                      </option>
+
+                      {convertedLeads.map(
+                        (lead) => {
+                          const leadPayments =
+                            paymentsByLead.get(
+                              Number(lead.id)
+                            ) || [];
+
+                          const received =
+                            leadPayments.reduce(
+                              (
+                                total,
+                                payment
+                              ) =>
+                                total +
+                                Number(
+                                  payment.amount ||
+                                    0
+                                ),
+                              0
+                            );
+
+                          const finalAmount =
+                            Number(
+                              lead.final_sale_amount ||
+                                0
+                            );
+
+                          const dueAmount =
+                            Math.max(
+                              finalAmount -
+                                received,
+                              0
+                            );
+
+                          return (
+                            <option
+                              key={lead.id}
+                              value={lead.id}
+                            >
+                              {lead.client_name} |{" "}
+                              {formatLabel(
+                                lead.status
+                              )}{" "}
+                              | Final{" "}
+                              {formatCurrency(
+                                finalAmount
+                              )}{" "}
+                              | Due{" "}
+                              {formatCurrency(
+                                dueAmount
+                              )}
+                            </option>
+                          );
+                        }
+                      )}
+                    </select>
+
+                    {convertedLeads.length ===
+                      0 && (
+                      <small>
+                        No converted lead found.
+                        Convert a lead from Sales
+                        first.
+                      </small>
+                    )}
                   </div>
 
-                  <div className="commission-main-info">
-                    <h3>{getClientName(commission)}</h3>
-                    <p>{getClientSubtitle(commission)}</p>
-                  </div>
+                  <div className="payment-form-group received-amount-field">
+                    <label>
+                      Received Amount *
+                    </label>
 
-                  <div className="compact-meta-row">
-                    <span>Lead #{commission.lead_id}</span>
-                    <span>{getSalesRepName(commission)}</span>
+                    <input
+                      name="amount"
+                      type="number"
+                      min="1"
+                      value={form.amount}
+                      onChange={
+                        handleFormChange
+                      }
+                      placeholder="Example: 25000"
+                      required
+                    />
                   </div>
+                </>
+              )}
 
-                  <div className="compact-value-grid">
-                    <div>
-                      <span>Sale</span>
+              {selectedLead &&
+                form.payment_type ===
+                  "lead_payment" && (
+                  <div className="lead-summary-grid full-span">
+                    <article>
+                      <span>Client</span>
 
                       <strong>
-                        {formatCurrency(commission.sale_amount)}
+                        {
+                          selectedLead.client_name
+                        }
                       </strong>
-                    </div>
+                    </article>
 
-                    <div>
-                      <span>Commission</span>
+                    <article>
+                      <span>Final Amount</span>
 
                       <strong>
                         {formatCurrency(
-                          commission.commission_amount
+                          selectedLeadPaymentInfo.finalAmount
+                        )}
+                      </strong>
+                    </article>
+
+                    <article>
+                      <span>Received</span>
+
+                      <strong>
+                        {formatCurrency(
+                          selectedLeadPaymentInfo.totalReceived
+                        )}
+                      </strong>
+                    </article>
+
+                    <article>
+                      <span>Due</span>
+
+                      <strong>
+                        {formatCurrency(
+                          selectedLeadPaymentInfo.dueAmount
+                        )}
+                      </strong>
+                    </article>
+                  </div>
+                )}
+
+              {form.payment_type ===
+                "other_payment" && (
+                <>
+                  <div className="payment-form-group">
+                    <label>
+                      Payment Title
+                    </label>
+
+                    <input
+                      name="payment_title"
+                      value={
+                        form.payment_title
+                      }
+                      onChange={
+                        handleFormChange
+                      }
+                      placeholder="Example: Maintenance advance"
+                    />
+                  </div>
+
+                  <div className="payment-form-group">
+                    <label>Payer Name</label>
+
+                    <input
+                      name="payer_name"
+                      value={form.payer_name}
+                      onChange={
+                        handleFormChange
+                      }
+                      placeholder="Client or payer name"
+                    />
+                  </div>
+
+                  <div className="payment-form-group">
+                    <label>Payer Phone</label>
+
+                    <input
+                      name="payer_phone"
+                      value={form.payer_phone}
+                      onChange={
+                        handleFormChange
+                      }
+                      placeholder="Phone number"
+                    />
+                  </div>
+
+                  <div className="payment-form-group">
+                    <label>Payer Email</label>
+
+                    <input
+                      name="payer_email"
+                      type="email"
+                      value={form.payer_email}
+                      onChange={
+                        handleFormChange
+                      }
+                      placeholder="Email address"
+                    />
+                  </div>
+
+                  <div className="payment-form-group">
+                    <label>
+                      Received Amount *
+                    </label>
+
+                    <input
+                      name="amount"
+                      type="number"
+                      min="1"
+                      value={form.amount}
+                      onChange={
+                        handleFormChange
+                      }
+                      placeholder="Example: 25000"
+                      required
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className="payment-form-group">
+                <label>Payment Method</label>
+
+                <select
+                  name="payment_method"
+                  value={
+                    form.payment_method
+                  }
+                  onChange={handleFormChange}
+                >
+                  {PAYMENT_METHOD_OPTIONS.map(
+                    (option) => (
+                      <option
+                        key={option.value}
+                        value={option.value}
+                      >
+                        {option.label}
+                      </option>
+                    )
+                  )}
+                </select>
+              </div>
+
+              <div className="payment-form-group">
+                <label>Payment Date</label>
+
+                <input
+                  name="payment_date"
+                  type="date"
+                  value={form.payment_date}
+                  onChange={handleFormChange}
+                />
+              </div>
+
+              <div className="payment-form-group">
+                <label>
+                  Reference Number
+                </label>
+
+                <input
+                  name="reference_number"
+                  value={
+                    form.reference_number
+                  }
+                  onChange={handleFormChange}
+                  placeholder="UPI reference or transaction ID"
+                />
+              </div>
+
+              <div className="payment-form-group full-span">
+                <label>Remarks</label>
+
+                <textarea
+                  name="remarks"
+                  value={form.remarks}
+                  onChange={handleFormChange}
+                  placeholder="Optional payment remarks"
+                />
+              </div>
+            </div>
+
+            <div className="payment-form-actions">
+              <button
+                type="button"
+                className="payment-secondary-button"
+                onClick={resetForm}
+                disabled={saving}
+              >
+                Clear
+              </button>
+
+              <button
+                type="submit"
+                className="payment-primary-button"
+                disabled={saving}
+              >
+                {saving
+                  ? "Saving..."
+                  : "Save Received Payment"}
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section className="payment-history-section">
+          <div className="payment-history-header">
+            <div>
+              <h2>Payment History</h2>
+
+              <p>
+                All received payment records
+                available to your account.
+              </p>
+            </div>
+
+            <span>
+              {filteredPayments.length} Records
+            </span>
+          </div>
+
+          <div className="payment-filter-row">
+            <div className="payment-search-box">
+              <Search size={17} />
+
+              <input
+                value={searchText}
+                onChange={(event) =>
+                  setSearchText(
+                    event.target.value
+                  )
+                }
+                placeholder="Search payer, lead, reference or amount..."
+              />
+            </div>
+
+            <select
+              value={paymentTypeFilter}
+              onChange={(event) =>
+                setPaymentTypeFilter(
+                  event.target.value
+                )
+              }
+            >
+              <option value="">
+                All Types
+              </option>
+
+              <option value="lead_payment">
+                Lead Payment
+              </option>
+
+              <option value="other_payment">
+                Other Payment
+              </option>
+            </select>
+
+            <select
+              value={methodFilter}
+              onChange={(event) =>
+                setMethodFilter(
+                  event.target.value
+                )
+              }
+            >
+              <option value="">
+                All Methods
+              </option>
+
+              {PAYMENT_METHOD_OPTIONS.map(
+                (option) => (
+                  <option
+                    key={option.value}
+                    value={option.value}
+                  >
+                    {option.label}
+                  </option>
+                )
+              )}
+            </select>
+
+            <button
+              type="button"
+              onClick={clearFilters}
+            >
+              Clear
+            </button>
+          </div>
+
+          {filteredPayments.length === 0 ? (
+            <div className="payment-empty-state">
+              <ReceiptText size={32} />
+
+              <h3>No payment found</h3>
+
+              <p>
+                Add a received payment or change
+                the filters.
+              </p>
+            </div>
+          ) : (
+            <div className="payment-card-grid">
+              {filteredPayments.map(
+                (payment) => (
+                  <article
+                    className="payment-record-card"
+                    key={payment.id}
+                  >
+                    <div className="payment-record-top">
+                      <div className="payment-record-icon">
+                        <IndianRupee
+                          size={17}
+                        />
+                      </div>
+
+                      <span
+                        className={`payment-type-badge ${payment.payment_type}`}
+                      >
+                        {formatLabel(
+                          payment.payment_type
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="payment-record-main">
+                      <h3>
+                        {payment.payment_title ||
+                          payment.payer_name ||
+                          formatLabel(
+                            payment.payment_type
+                          )}
+                      </h3>
+
+                      <p>
+                        {payment.payer_name ||
+                          "-"}
+                      </p>
+                    </div>
+
+                    <div className="payment-value-box">
+                      <span>
+                        Received Amount
+                      </span>
+
+                      <strong>
+                        {formatCurrency(
+                          payment.amount
                         )}
                       </strong>
                     </div>
 
-                    <div className="compact-paid-value">
-                      <span>Paid</span>
+                    <div className="payment-record-details">
+                      <div>
+                        <span>Method</span>
 
-                      <strong>
-                        {formatCurrency(commission.paid_amount)}
-                      </strong>
+                        <strong>
+                          {formatLabel(
+                            payment.payment_method
+                          )}
+                        </strong>
+                      </div>
+
+                      <div>
+                        <span>Date</span>
+
+                        <strong>
+                          {formatDate(
+                            payment.payment_date
+                          )}
+                        </strong>
+                      </div>
+
+                      <div>
+                        <span>Lead</span>
+
+                        <strong>
+                          {payment.lead_id
+                            ? `#${payment.lead_id}`
+                            : "-"}
+                        </strong>
+                      </div>
+
+                      <div>
+                        <span>Reference</span>
+
+                        <strong>
+                          {payment.reference_number ||
+                            "-"}
+                        </strong>
+                      </div>
                     </div>
 
-                    <div className="compact-due-value">
-                      <span>Due</span>
+                    {payment.remarks && (
+                      <p className="payment-remarks">
+                        {payment.remarks}
+                      </p>
+                    )}
 
-                      <strong>
-                        {formatCurrency(commission.due_amount)}
-                      </strong>
-                    </div>
-                  </div>
+                    {isAdminUser && (
+                      <button
+                        type="button"
+                        className="payment-delete-button"
+                        onClick={() =>
+                          openDeleteModal(
+                            payment
+                          )
+                        }
+                        disabled={
+                          deletingPaymentId ===
+                          payment.id
+                        }
+                      >
+                        <Trash2 size={15} />
 
-                  <div className="commission-card-footer">
-                    <span>
-                      {Number(
-                        commission.commission_percentage || 0
-                      )}
-                      % commission
-                    </span>
-
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedCommissionId(commission.id);
-                      }}
-                    >
-                      <Eye size={15} />
-                      View Details
-                    </button>
-                  </div>
-                </article>
-              ))}
+                        Delete Payment
+                      </button>
+                    )}
+                  </article>
+                )
+              )}
             </div>
           )}
         </section>
       </div>
 
-      {selectedCommission &&
-        renderCommissionDetails(selectedCommission)}
-
-      {commissionToDelete && (
-        <div
-          className="confirmation-backdrop"
-          onMouseDown={() => {
-            if (!deletingCommissionId) {
-              setCommissionToDelete(null);
-            }
-          }}
-        >
-          <section
-            className="confirmation-modal"
-            onMouseDown={stopPropagation}
+      {deleteModal.open &&
+        deleteModal.payment && (
+          <div
+            className="payment-modal-backdrop"
+            onMouseDown={closeDeleteModal}
           >
-            <div className="confirmation-danger-icon">
-              <Trash2 size={24} />
-            </div>
-
-            <h3>Delete Commission?</h3>
-
-            <p>
-              You are deleting the commission for{" "}
-              <strong>
-                {getClientName(commissionToDelete)}
-              </strong>
-              . Its connected commission payment history will also be
-              deleted.
-            </p>
-
-            <div className="confirmation-warning">
-              <AlertCircle size={17} />
-              <span>This action cannot be undone.</span>
-            </div>
-
-            <div className="confirmation-actions">
+            <section
+              className="payment-delete-modal"
+              onMouseDown={
+                stopPropagation
+              }
+            >
               <button
                 type="button"
-                className="confirmation-cancel-btn"
-                onClick={() => setCommissionToDelete(null)}
-                disabled={Boolean(deletingCommissionId)}
+                className="payment-modal-close"
+                onClick={closeDeleteModal}
+                disabled={Boolean(
+                  deletingPaymentId
+                )}
               >
-                Cancel
+                <X size={17} />
               </button>
 
-              <button
-                type="button"
-                className="confirmation-delete-btn"
-                onClick={handleDeleteCommission}
-                disabled={
-                  deletingCommissionId === commissionToDelete.id
-                }
-              >
-                <Trash2 size={16} />
+              <div className="payment-modal-danger-icon">
+                <AlertTriangle size={25} />
+              </div>
 
-                {deletingCommissionId === commissionToDelete.id
-                  ? "Deleting..."
-                  : "Delete Commission"}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
+              <h2>Delete Payment?</h2>
 
-      {paymentToDelete && (
-        <div
-          className="confirmation-backdrop"
-          onMouseDown={() => {
-            if (!deletingPaymentId) {
-              setPaymentToDelete(null);
-            }
-          }}
-        >
-          <section
-            className="confirmation-modal"
-            onMouseDown={stopPropagation}
-          >
-            <div className="confirmation-danger-icon">
-              <Trash2 size={24} />
-            </div>
+              <p className="payment-modal-message">
+                This payment will be
+                permanently removed from the
+                received payment history.
+              </p>
 
-            <h3>Delete Commission Payment?</h3>
+              <div className="payment-modal-details">
+                <div>
+                  <span>Amount</span>
 
-            <p>
-              Delete the payment of{" "}
-              <strong>
-                {formatCurrency(paymentToDelete.amount)}
-              </strong>{" "}
-              from{" "}
-              <strong>{paymentToDelete.client_name}</strong>?
-            </p>
+                  <strong>
+                    {formatCurrency(
+                      deleteModal.payment
+                        .amount
+                    )}
+                  </strong>
+                </div>
 
-            <div className="confirmation-warning">
-              <AlertCircle size={17} />
+                <div>
+                  <span>Payer</span>
 
-              <span>
-                Paid and due commission values will be recalculated.
-              </span>
-            </div>
+                  <strong>
+                    {deleteModal.payment
+                      .payer_name ||
+                      deleteModal.payment
+                        .payment_title ||
+                      "-"}
+                  </strong>
+                </div>
 
-            <div className="confirmation-actions">
-              <button
-                type="button"
-                className="confirmation-cancel-btn"
-                onClick={() => setPaymentToDelete(null)}
-                disabled={Boolean(deletingPaymentId)}
-              >
-                Cancel
-              </button>
+                <div>
+                  <span>Payment Type</span>
 
-              <button
-                type="button"
-                className="confirmation-delete-btn"
-                onClick={handleDeletePayment}
-                disabled={
-                  deletingPaymentId === paymentToDelete.id
-                }
-              >
-                <Trash2 size={16} />
+                  <strong>
+                    {formatLabel(
+                      deleteModal.payment
+                        .payment_type
+                    )}
+                  </strong>
+                </div>
 
-                {deletingPaymentId === paymentToDelete.id
-                  ? "Deleting..."
-                  : "Delete Payment"}
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
+                <div>
+                  <span>Lead</span>
+
+                  <strong>
+                    {deleteModal.payment
+                      .lead_id
+                      ? `Lead #${deleteModal.payment.lead_id}`
+                      : "-"}
+                  </strong>
+                </div>
+              </div>
+
+              <div className="payment-modal-warning">
+                <AlertTriangle size={16} />
+
+                <span>
+                  This action cannot be
+                  undone.
+                </span>
+              </div>
+
+              <div className="payment-modal-actions">
+                <button
+                  type="button"
+                  className="payment-modal-cancel"
+                  onClick={closeDeleteModal}
+                  disabled={Boolean(
+                    deletingPaymentId
+                  )}
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  className="payment-modal-delete"
+                  onClick={
+                    handleDeletePayment
+                  }
+                  disabled={Boolean(
+                    deletingPaymentId
+                  )}
+                >
+                  <Trash2 size={16} />
+
+                  {deletingPaymentId
+                    ? "Deleting..."
+                    : "Delete Payment"}
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
     </>
   );
 }
 
-const commissionStyles = `
-.commission-page {
+const receivePaymentStyles = `
+.receive-payment-page {
   width: 100%;
   min-height: calc(100vh - 58px);
   display: flex;
@@ -1768,7 +1816,7 @@ const commissionStyles = `
   gap: 14px;
 }
 
-.commission-header-card {
+.payment-page-header {
   width: 100%;
   min-height: 82px;
   padding: 16px 18px;
@@ -1782,14 +1830,14 @@ const commissionStyles = `
   gap: 16px;
 }
 
-.commission-header-left {
+.payment-title-wrap {
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.commission-back-button {
+.payment-back-button {
   width: 40px;
   height: 40px;
   border: 1px solid #dbeafe;
@@ -1801,51 +1849,39 @@ const commissionStyles = `
   flex-shrink: 0;
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
   cursor: pointer;
-  transition:
-    background 0.18s ease,
-    border-color 0.18s ease,
-    transform 0.18s ease;
 }
 
-.commission-back-button:hover {
+.payment-back-button:hover {
   background: #eff6ff;
-  border-color: #bfdbfe;
-  transform: translateX(-1px);
 }
 
-.commission-back-button:focus-visible {
-  outline: 3px solid rgba(37, 99, 235, 0.18);
-  outline-offset: 2px;
-}
-
-.commission-header-icon {
+.payment-title-icon {
   width: 44px;
   height: 44px;
   border-radius: 14px;
   display: grid;
   place-items: center;
-  color: #2563eb;
-  background: #eef6ff;
-  border: 1px solid #dbeafe;
+  color: #059669;
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
   flex-shrink: 0;
 }
 
-.commission-header-card h1 {
+.payment-page-header h1 {
   margin: 0;
   color: #06142b;
   font-size: 25px;
   line-height: 1.1;
-  letter-spacing: -0.035em;
 }
 
-.commission-header-card p {
+.payment-page-header p {
   margin: 5px 0 0;
   color: #52677e;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 650;
 }
 
-.record-count {
+.payment-count-pill {
   min-height: 36px;
   padding: 0 14px;
   border-radius: 999px;
@@ -1856,149 +1892,123 @@ const commissionStyles = `
   font-weight: 900;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   white-space: nowrap;
 }
 
-.commission-alert {
-  min-height: 44px;
+.payment-notification {
+  min-height: 46px;
   padding: 11px 14px;
   border-radius: 14px;
   display: flex;
   align-items: center;
   gap: 9px;
-  font-size: 13px;
-  font-weight: 800;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.035);
 }
 
-.commission-alert > span {
-  flex: 1;
-}
-
-.commission-alert button {
-  width: 30px;
-  height: 30px;
-  border: none;
-  border-radius: 9px;
-  background: transparent;
-  color: currentColor;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-}
-
-.error-alert {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #dc2626;
-}
-
-.success-alert {
+.payment-notification.success {
   background: #ecfdf5;
   border: 1px solid #bbf7d0;
   color: #059669;
 }
 
-.commission-summary-grid {
-  width: 100%;
+.payment-notification.error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+}
+
+.payment-notification span {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.payment-notification button {
+  width: 29px;
+  height: 29px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  place-items: center;
+  cursor: pointer;
+}
+
+.payment-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 11px;
 }
 
-.commission-summary-card {
-  min-height: 91px;
+.payment-summary-card {
+  min-width: 0;
+  min-height: 92px;
   padding: 14px;
   border-radius: 16px;
   background: #ffffff;
   border: 1px solid var(--erp-border, #e2e8f0);
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.035);
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.commission-summary-card p {
-  margin: 0 0 8px;
+.summary-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.summary-icon.green {
+  color: #059669;
+  background: #ecfdf5;
+}
+
+.summary-icon.blue {
+  color: #2563eb;
+  background: #eff6ff;
+}
+
+.summary-icon.purple {
+  color: #7c3aed;
+  background: #f5f3ff;
+}
+
+.summary-icon.orange {
+  color: #ea580c;
+  background: #fff7ed;
+}
+
+.payment-summary-card span {
+  display: block;
   color: #64748b;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 900;
-  letter-spacing: 0.035em;
   text-transform: uppercase;
 }
 
-.commission-summary-card strong {
+.payment-summary-card strong {
   display: block;
+  margin-top: 5px;
   color: #06142b;
   font-size: 20px;
-  line-height: 1;
-  font-weight: 950;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 900;
 }
 
-.commission-summary-card span {
-  display: block;
-  margin-top: 9px;
+.payment-summary-card p {
+  margin: 5px 0 0;
   color: #64748b;
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 650;
 }
 
-.commission-filter-card {
-  padding: 11px;
-  border-radius: 16px;
-  background: #ffffff;
-  border: 1px solid var(--erp-border, #e2e8f0);
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.035);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 170px 72px;
-  gap: 10px;
-}
-
-.search-box {
-  height: 40px;
-  padding: 0 12px;
-  border: 1px solid #dbe3ef;
-  border-radius: 12px;
-  background: #ffffff;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  color: #64748b;
-}
-
-.search-box input,
-.commission-filter-card select {
+.payment-entry-section,
+.payment-history-section {
   width: 100%;
-  height: 40px;
-  border: none;
-  outline: none;
-  background: transparent;
-  color: #06142b;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.commission-filter-card select {
-  padding: 0 11px;
-  border: 1px solid #dbe3ef;
-  border-radius: 12px;
-  background: #ffffff;
-}
-
-.clear-btn {
-  height: 40px;
-  border: 1px solid #dbe3ef;
-  border-radius: 12px;
-  background: #ffffff;
-  color: #06142b;
-  font-size: 12px;
-  font-weight: 850;
-  cursor: pointer;
-}
-
-.commission-list-section {
-  width: 100%;
-  min-height: 380px;
   border-radius: 19px;
   background: #ffffff;
   border: 1px solid var(--erp-border, #e2e8f0);
@@ -2006,151 +2016,348 @@ const commissionStyles = `
   overflow: hidden;
 }
 
-.commission-list-header {
-  min-height: 66px;
-  padding: 15px 17px;
+.payment-section-header,
+.payment-history-header {
+  min-height: 68px;
+  padding: 14px 17px;
   border-bottom: 1px solid #eef2f7;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 14px;
 }
 
-.commission-list-header h2 {
+.payment-section-title {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.payment-section-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: #ecfdf5;
+  color: #059669;
+  border: 1px solid #bbf7d0;
+  display: grid;
+  place-items: center;
+}
+
+.payment-section-header h2,
+.payment-history-header h2 {
   margin: 0;
   color: #06142b;
-  font-size: 19px;
-  letter-spacing: -0.025em;
+  font-size: 21px;
+  font-weight: 900;
 }
 
-.commission-list-header p {
+.payment-section-header p,
+.payment-history-header p {
   margin: 5px 0 0;
   color: #64748b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.payment-history-header > span {
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eef6ff;
+  color: #2563eb;
+  border: 1px solid #dbeafe;
+  font-size: 11px;
+  font-weight: 900;
+  display: inline-flex;
+  align-items: center;
+}
+
+.payment-entry-form {
+  padding: 14px 17px 17px;
+}
+
+.payment-type-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin-bottom: 13px;
+}
+
+.payment-type-switch button {
+  min-height: 41px;
+  border-radius: 12px;
+  border: 1px solid #dbe3ef;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.payment-type-switch button.active {
+  background: #ecfdf5;
+  border-color: #86efac;
+  color: #059669;
+}
+
+.payment-type-switch button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.payment-form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 13px;
+}
+
+.lead-select-field {
+  grid-column: span 3;
+}
+
+.received-amount-field {
+  grid-column: span 1;
+}
+
+.payment-form-group {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.payment-form-group label {
+  color: #334155;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.payment-form-group input,
+.payment-form-group select,
+.payment-form-group textarea {
+  width: 100%;
+  min-height: 43px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #dbe3ef;
+  background: #ffffff;
+  color: #0f172a;
+  outline: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.payment-form-group input::placeholder,
+.payment-form-group textarea::placeholder {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.payment-form-group input:focus,
+.payment-form-group select:focus,
+.payment-form-group textarea:focus {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
+}
+
+.payment-form-group textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+
+.payment-form-group small {
+  color: #ea580c;
   font-size: 11px;
   font-weight: 700;
 }
 
-.commission-empty {
-  min-height: 280px;
-  padding: 24px;
-  color: #64748b;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  text-align: center;
+.full-span {
+  grid-column: 1 / -1;
 }
 
-.commission-empty strong {
-  color: #334155;
-  font-size: 14px;
-}
-
-.commission-empty span {
-  font-size: 12px;
-}
-
-.commission-grid {
-  padding: 13px;
+.lead-summary-grid {
+  padding: 10px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(245px, 1fr));
-  gap: 12px;
-  align-items: stretch;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
 }
 
-.commission-card {
-  min-width: 0;
-  padding: 13px;
-  border-radius: 16px;
-  border: 1px solid #dbe3ef;
+.lead-summary-grid article {
+  min-height: 64px;
+  padding: 10px;
+  border-radius: 11px;
   background: #ffffff;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.035);
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  transition:
-    transform 0.18s ease,
-    border-color 0.18s ease,
-    box-shadow 0.18s ease;
+  border: 1px solid #e2e8f0;
 }
 
-.commission-card:hover {
-  transform: translateY(-2px);
-  border-color: #bfdbfe;
-  box-shadow: 0 13px 27px rgba(37, 99, 235, 0.09);
-}
-
-.commission-card:focus-visible {
-  outline: 3px solid rgba(37, 99, 235, 0.2);
-  outline-offset: 2px;
-}
-
-.commission-card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 9px;
-}
-
-.commission-card-id {
-  display: flex;
-  align-items: center;
-  gap: 7px;
+.lead-summary-grid span {
   color: #64748b;
   font-size: 10px;
   font-weight: 850;
+  text-transform: uppercase;
 }
 
-.commission-icon {
-  width: 32px;
-  height: 32px;
+.lead-summary-grid strong {
+  display: block;
+  margin-top: 5px;
+  color: #06142b;
+  font-size: 13px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.payment-form-actions {
+  margin-top: 13px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.payment-primary-button,
+.payment-secondary-button {
+  min-width: 150px;
+  min-height: 42px;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.payment-primary-button {
+  border: none;
+  background: #059669;
+  color: #ffffff;
+}
+
+.payment-secondary-button {
+  border: 1px solid #dbe3ef;
+  background: #ffffff;
+  color: #334155;
+}
+
+.payment-primary-button:disabled,
+.payment-secondary-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.payment-filter-row {
+  padding: 11px 13px;
+  background: #f8fafc;
+  border-bottom: 1px solid #eef2f7;
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 160px 160px 72px;
+  gap: 9px;
+}
+
+.payment-search-box {
+  min-height: 41px;
+  padding: 0 11px;
+  border-radius: 11px;
+  border: 1px solid #dbe3ef;
+  background: #ffffff;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.payment-search-box input {
+  width: 100%;
+  height: 40px;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.payment-filter-row select,
+.payment-filter-row button {
+  min-height: 41px;
+  padding: 0 11px;
+  border-radius: 11px;
+  border: 1px solid #dbe3ef;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.payment-filter-row button {
+  cursor: pointer;
+}
+
+.payment-card-grid {
+  padding: 13px;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 11px;
+}
+
+.payment-record-card {
+  min-width: 0;
+  padding: 12px;
+  border-radius: 15px;
+  background: #ffffff;
+  border: 1px solid #dbe3ef;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.035);
+  display: flex;
+  flex-direction: column;
+}
+
+.payment-record-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.payment-record-icon {
+  width: 34px;
+  height: 34px;
   border-radius: 10px;
+  background: #ecfdf5;
+  color: #059669;
   display: grid;
   place-items: center;
-  background: #eef6ff;
-  border: 1px solid #dbeafe;
-  color: #2563eb;
 }
 
-.commission-status {
-  padding: 5px 8px;
+.payment-type-badge {
+  min-height: 24px;
+  padding: 0 8px;
   border-radius: 999px;
   font-size: 9px;
-  font-weight: 950;
-  text-transform: uppercase;
+  font-weight: 900;
+  display: inline-flex;
+  align-items: center;
   white-space: nowrap;
 }
 
-.status-pending {
-  background: #fff7ed;
-  color: #ea580c;
-  border: 1px solid #fed7aa;
-}
-
-.status-partial {
-  background: #eef6ff;
+.payment-type-badge.lead_payment {
+  background: #eff6ff;
   color: #2563eb;
   border: 1px solid #bfdbfe;
 }
 
-.status-paid {
-  background: #ecfdf5;
-  color: #059669;
-  border: 1px solid #bbf7d0;
+.payment-type-badge.other_payment {
+  background: #f5f3ff;
+  color: #7c3aed;
+  border: 1px solid #ddd6fe;
 }
 
-.status-cancelled {
-  background: #f1f5f9;
-  color: #64748b;
-  border: 1px solid #cbd5e1;
-}
-
-.commission-main-info {
-  margin-top: 11px;
+.payment-record-main {
+  margin-top: 10px;
   min-width: 0;
 }
 
-.commission-main-info h3 {
+.payment-record-main h3 {
   margin: 0;
   color: #06142b;
   font-size: 15px;
@@ -2160,132 +2367,145 @@ const commissionStyles = `
   text-overflow: ellipsis;
 }
 
-.commission-main-info p {
-  min-height: 16px;
+.payment-record-main p {
   margin: 5px 0 0;
   color: #64748b;
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.compact-meta-row {
-  margin-top: 9px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.compact-meta-row span {
-  min-width: 0;
-  padding: 4px 7px;
-  border-radius: 999px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  color: #64748b;
-  font-size: 9px;
-  font-weight: 800;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.compact-meta-row span:last-child {
-  flex: 1;
-}
-
-.compact-value-grid {
-  margin-top: 11px;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-}
-
-.compact-value-grid > div {
-  min-width: 0;
-  padding: 8px 9px;
+.payment-value-box {
+  margin-top: 10px;
+  padding: 10px;
   border-radius: 11px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
 }
 
-.compact-value-grid span {
+.payment-value-box span {
   display: block;
-  color: #64748b;
+  color: #047857;
   font-size: 9px;
   font-weight: 850;
   text-transform: uppercase;
 }
 
-.compact-value-grid strong {
+.payment-value-box strong {
+  display: block;
+  margin-top: 5px;
+  color: #047857;
+  font-size: 18px;
+  font-weight: 950;
+}
+
+.payment-record-details {
+  margin-top: 9px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.payment-record-details div {
+  min-width: 0;
+  padding: 8px;
+  border-radius: 9px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.payment-record-details span {
+  display: block;
+  color: #64748b;
+  font-size: 8px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.payment-record-details strong {
   display: block;
   margin-top: 4px;
   color: #06142b;
-  font-size: 12px;
-  font-weight: 950;
+  font-size: 11px;
+  font-weight: 850;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.compact-paid-value {
-  background: #f0fdf4 !important;
-  border-color: #bbf7d0 !important;
+.payment-remarks {
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: 9px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
-.compact-paid-value strong {
-  color: #047857;
-}
-
-.compact-due-value {
-  background: #fff7ed !important;
-  border-color: #fed7aa !important;
-}
-
-.compact-due-value strong {
-  color: #c2410c;
-}
-
-.commission-card-footer {
+.payment-delete-button {
+  width: 100%;
+  min-height: 36px;
   margin-top: auto;
-  padding-top: 11px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.commission-card-footer > span {
-  color: #64748b;
-  font-size: 10px;
-  font-weight: 750;
-}
-
-.commission-card-footer button {
-  min-height: 31px;
   padding: 0 10px;
   border: none;
-  border-radius: 9px;
-  background: #eef6ff;
-  color: #2563eb;
-  font-size: 10px;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #dc2626;
+  font-size: 11px;
   font-weight: 900;
   cursor: pointer;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 5px;
-  white-space: nowrap;
+  justify-content: center;
+  gap: 6px;
 }
 
-.commission-modal-backdrop,
-.confirmation-backdrop {
+.payment-delete-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.payment-empty-state,
+.access-empty-state {
+  min-height: 250px;
+  padding: 32px 20px;
+  color: #059669;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.access-empty-state {
+  border-radius: 18px;
+  border: 1px solid #e2e8f0;
+}
+
+.payment-empty-state h3,
+.access-empty-state h3 {
+  margin: 0;
+  color: #06142b;
+  font-size: 18px;
+}
+
+.payment-empty-state p,
+.access-empty-state p {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.payment-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1200;
-  padding: 22px;
+  z-index: 9999;
+  padding: 20px;
   background: rgba(15, 23, 42, 0.58);
   backdrop-filter: blur(5px);
   display: flex;
@@ -2293,535 +2513,37 @@ const commissionStyles = `
   justify-content: center;
 }
 
-.commission-detail-modal {
-  width: min(1050px, 100%);
-  max-height: calc(100vh - 44px);
-  border-radius: 22px;
-  background: #f8fafc;
-  border: 1px solid rgba(255, 255, 255, 0.65);
-  box-shadow: 0 32px 75px rgba(15, 23, 42, 0.27);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.commission-modal-header {
-  min-height: 78px;
-  padding: 16px 18px;
-  background: #ffffff;
-  border-bottom: 1px solid #e2e8f0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.commission-modal-heading {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.commission-modal-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
-  display: grid;
-  place-items: center;
-  color: #2563eb;
-  background: #eef6ff;
-  border: 1px solid #dbeafe;
-  flex-shrink: 0;
-}
-
-.modal-heading-line {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.modal-heading-line h2 {
-  margin: 0;
-  color: #06142b;
-  font-size: 21px;
-  letter-spacing: -0.025em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.commission-modal-heading p {
-  margin: 5px 0 0;
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 750;
-}
-
-.modal-close-btn {
-  width: 37px;
-  height: 37px;
-  border: 1px solid #dbe3ef;
-  border-radius: 11px;
-  background: #ffffff;
-  color: #475569;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-}
-
-.commission-modal-body {
-  padding: 15px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 13px;
-}
-
-.detail-section {
-  padding: 15px;
-  border-radius: 17px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-}
-
-.detail-section-header {
-  margin-bottom: 13px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.detail-section-header h3 {
-  margin: 0;
-  color: #06142b;
-  font-size: 16px;
-}
-
-.detail-section-header p {
-  margin: 4px 0 0;
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.client-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 9px;
-}
-
-.client-detail-item {
-  min-width: 0;
-  min-height: 68px;
-  padding: 11px;
-  border-radius: 13px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  color: #2563eb;
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-}
-
-.client-detail-item > div {
-  min-width: 0;
-}
-
-.client-detail-item span {
-  display: block;
-  color: #64748b;
-  font-size: 9px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.client-detail-item strong {
-  display: block;
-  margin-top: 5px;
-  color: #06142b;
-  font-size: 11px;
-  font-weight: 850;
-  word-break: break-word;
-}
-
-.modal-value-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 9px;
-}
-
-.modal-value-grid article {
-  min-width: 0;
-  min-height: 77px;
-  padding: 12px;
-  border-radius: 13px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-}
-
-.modal-value-grid span {
-  color: #64748b;
-  font-size: 9px;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.modal-value-grid strong {
-  display: block;
-  margin-top: 7px;
-  color: #06142b;
-  font-size: 15px;
-  font-weight: 950;
-  word-break: break-word;
-}
-
-.paid-value-card {
-  background: #f0fdf4 !important;
-  border-color: #bbf7d0 !important;
-}
-
-.paid-value-card strong {
-  color: #047857;
-}
-
-.due-value-card {
-  background: #fff7ed !important;
-  border-color: #fed7aa !important;
-}
-
-.due-value-card strong {
-  color: #c2410c;
-}
-
-.modal-percentage-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
-  gap: 10px;
-  align-items: end;
-}
-
-.modal-input-group {
-  min-width: 0;
-}
-
-.modal-input-group label {
-  display: block;
-  margin-bottom: 6px;
-  color: #334155;
-  font-size: 10px;
-  font-weight: 850;
-}
-
-.modal-input-group input,
-.modal-input-group select {
-  width: 100%;
-  height: 40px;
-  padding: 0 11px;
-  border: 1px solid #dbe3ef;
-  border-radius: 11px;
-  background: #ffffff;
-  color: #06142b;
-  outline: none;
-  font-size: 12px;
-  font-weight: 750;
-}
-
-.input-with-symbol {
-  height: 40px;
-  padding: 0 10px;
-  border: 1px solid #dbe3ef;
-  border-radius: 11px;
-  background: #ffffff;
-  color: #64748b;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.input-with-symbol:focus-within {
-  border-color: #93c5fd;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.09);
-}
-
-.input-with-symbol input {
-  height: 38px;
-  padding: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.commission-preview-box {
-  min-height: 40px;
-  padding: 7px 11px;
-  border-radius: 11px;
-  background: #eef6ff;
-  border: 1px solid #bfdbfe;
-}
-
-.commission-preview-box span {
-  display: block;
-  color: #64748b;
-  font-size: 9px;
-  font-weight: 800;
-}
-
-.commission-preview-box strong {
-  display: block;
-  margin-top: 2px;
-  color: #1d4ed8;
-  font-size: 13px;
-  font-weight: 950;
-}
-
-.primary-modal-btn,
-.payment-submit-btn {
-  min-height: 40px;
-  padding: 0 15px;
-  border: none;
-  border-radius: 11px;
-  background: #2563eb;
-  color: #ffffff;
-  font-size: 11px;
-  font-weight: 900;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  white-space: nowrap;
-}
-
-.primary-modal-btn:disabled,
-.payment-submit-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.modal-payment-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.modal-remarks-field {
-  grid-column: span 3;
-}
-
-.payment-action-row {
-  margin-top: 11px;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.payment-submit-btn {
-  background: #059669;
-}
-
-.section-due-label,
-.payment-count-badge {
-  min-height: 29px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
-  color: #c2410c;
-  font-size: 10px;
-  font-weight: 900;
-  display: inline-flex;
-  align-items: center;
-  white-space: nowrap;
-}
-
-.payment-count-badge {
-  background: #f8fafc;
-  border-color: #e2e8f0;
-  color: #475569;
-}
-
-.commission-paid-message {
-  padding: 13px;
-  border-radius: 13px;
-  background: #ecfdf5;
-  border: 1px solid #bbf7d0;
-  color: #059669;
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.commission-paid-message strong {
-  display: block;
-  color: #047857;
-  font-size: 12px;
-}
-
-.commission-paid-message span {
-  display: block;
-  margin-top: 3px;
-  color: #047857;
-  font-size: 10px;
-}
-
-.modal-empty-state {
-  min-height: 130px;
-  border-radius: 13px;
-  border: 1px dashed #cbd5e1;
-  color: #64748b;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-
-.modal-empty-state strong {
-  color: #334155;
-  font-size: 12px;
-}
-
-.modal-empty-state span {
-  font-size: 10px;
-}
-
-.modal-payment-history {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.modal-payment-history-item {
-  padding: 10px 11px;
-  border-radius: 13px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.payment-history-main {
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-}
-
-.payment-history-icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: #ecfdf5;
-  border: 1px solid #bbf7d0;
-  color: #059669;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-}
-
-.payment-history-main strong {
-  display: block;
-  color: #06142b;
-  font-size: 13px;
-  font-weight: 950;
-}
-
-.payment-history-main span {
-  display: block;
-  margin-top: 3px;
-  color: #64748b;
-  font-size: 10px;
-  font-weight: 750;
-}
-
-.payment-history-main p {
-  margin: 4px 0 0;
-  color: #475569;
-  font-size: 10px;
-}
-
-.payment-delete-btn {
-  min-height: 32px;
-  padding: 0 10px;
-  border: 1px solid #fecaca;
-  border-radius: 9px;
-  background: #fef2f2;
-  color: #dc2626;
-  font-size: 10px;
-  font-weight: 900;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  white-space: nowrap;
-}
-
-.payment-delete-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.commission-danger-section {
-  padding: 14px;
-  border-radius: 16px;
-  background: #fff7f7;
-  border: 1px solid #fecaca;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-}
-
-.commission-danger-section h3 {
-  margin: 0;
-  color: #991b1b;
-  font-size: 14px;
-}
-
-.commission-danger-section p {
-  margin: 4px 0 0;
-  color: #b91c1c;
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.danger-delete-btn {
-  min-height: 37px;
-  padding: 0 13px;
-  border: none;
-  border-radius: 10px;
-  background: #dc2626;
-  color: #ffffff;
-  font-size: 10px;
-  font-weight: 900;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.confirmation-modal {
-  width: min(430px, 100%);
-  padding: 22px;
+.payment-delete-modal {
+  width: min(440px, 100%);
+  position: relative;
+  padding: 23px;
   border-radius: 21px;
   background: #ffffff;
   border: 1px solid #e2e8f0;
-  box-shadow: 0 30px 70px rgba(15, 23, 42, 0.28);
+  box-shadow: 0 30px 75px rgba(15, 23, 42, 0.3);
   text-align: center;
 }
 
-.confirmation-danger-icon {
-  width: 52px;
-  height: 52px;
-  margin: 0 auto;
-  border-radius: 16px;
+.payment-modal-close {
+  position: absolute;
+  top: 13px;
+  right: 13px;
+  width: 33px;
+  height: 33px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #64748b;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.payment-modal-danger-icon {
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 14px;
+  border-radius: 17px;
   background: #fef2f2;
   border: 1px solid #fecaca;
   color: #dc2626;
@@ -2829,209 +2551,193 @@ const commissionStyles = `
   place-items: center;
 }
 
-.confirmation-modal h3 {
-  margin: 15px 0 0;
+.payment-delete-modal h2 {
+  margin: 0;
   color: #06142b;
-  font-size: 19px;
+  font-size: 21px;
 }
 
-.confirmation-modal > p {
-  margin: 9px 0 0;
+.payment-modal-message {
+  margin: 8px auto 15px;
   color: #64748b;
   font-size: 12px;
-  line-height: 1.65;
+  line-height: 1.55;
 }
 
-.confirmation-modal > p strong {
-  color: #06142b;
+.payment-modal-details {
+  padding: 10px;
+  border-radius: 15px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  text-align: left;
 }
 
-.confirmation-warning {
-  margin-top: 14px;
-  padding: 10px 11px;
+.payment-modal-details div {
+  min-height: 56px;
+  padding: 9px;
   border-radius: 11px;
+  background: #ffffff;
+  border: 1px solid #eef2f7;
+}
+
+.payment-modal-details span {
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.payment-modal-details strong {
+  display: block;
+  margin-top: 5px;
+  color: #06142b;
+  font-size: 12px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.payment-modal-warning {
+  margin-top: 12px;
+  padding: 9px;
+  border-radius: 10px;
   background: #fff7ed;
   border: 1px solid #fed7aa;
   color: #c2410c;
   font-size: 10px;
-  font-weight: 800;
+  font-weight: 850;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 6px;
 }
 
-.confirmation-actions {
-  margin-top: 18px;
+.payment-modal-actions {
+  margin-top: 16px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 9px;
 }
 
-.confirmation-cancel-btn,
-.confirmation-delete-btn {
+.payment-modal-cancel,
+.payment-modal-delete {
   min-height: 40px;
   border-radius: 11px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 900;
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
 }
 
-.confirmation-cancel-btn {
+.payment-modal-cancel {
   border: 1px solid #dbe3ef;
   background: #ffffff;
   color: #334155;
 }
 
-.confirmation-delete-btn {
+.payment-modal-delete {
   border: none;
   background: #dc2626;
   color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
-.confirmation-cancel-btn:disabled,
-.confirmation-delete-btn:disabled {
-  opacity: 0.6;
+.payment-modal-cancel:disabled,
+.payment-modal-delete:disabled,
+.payment-modal-close:disabled {
+  opacity: 0.65;
   cursor: not-allowed;
 }
 
-@media (max-width: 1550px) {
-  .commission-summary-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .commission-grid {
-    grid-template-columns: repeat(3, minmax(245px, 1fr));
+@media (max-width: 1600px) {
+  .payment-card-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 1200px) {
-  .commission-grid {
-    grid-template-columns: repeat(2, minmax(245px, 1fr));
-  }
-
-  .client-detail-grid {
+@media (max-width: 1350px) {
+  .payment-form-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .modal-value-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 850px) {
-  .commission-summary-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .commission-filter-card {
-    grid-template-columns: 1fr;
-  }
-
-  .commission-modal-backdrop,
-  .confirmation-backdrop {
-    padding: 10px;
-  }
-
-  .commission-detail-modal {
-    max-height: calc(100vh - 20px);
-    border-radius: 18px;
-  }
-
-  .modal-percentage-row,
-  .modal-payment-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .modal-remarks-field {
+  .lead-select-field,
+  .received-amount-field {
     grid-column: span 1;
   }
 
-  .primary-modal-btn,
-  .payment-submit-btn {
-    width: 100%;
-  }
-
-  .modal-value-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .payment-card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 620px) {
-  .commission-header-card {
+@media (max-width: 1050px) {
+  .payment-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .payment-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .payment-filter-row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .payment-page-header {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .commission-header-left {
+  .payment-count-pill {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .payment-form-grid,
+  .lead-summary-grid,
+  .payment-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .lead-select-field,
+  .received-amount-field {
+    grid-column: 1 / -1;
+  }
+
+  .payment-filter-row {
+    grid-template-columns: 1fr;
+  }
+
+  .payment-form-actions {
+    flex-direction: column;
+  }
+
+  .payment-primary-button,
+  .payment-secondary-button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .payment-card-grid,
+  .payment-modal-details,
+  .payment-modal-actions,
+  .payment-type-switch {
+    grid-template-columns: 1fr;
+  }
+
+  .payment-title-wrap {
     align-items: flex-start;
   }
 
-  .commission-header-card h1 {
+  .payment-page-header h1 {
     font-size: 21px;
-  }
-
-  .record-count {
-    width: 100%;
-  }
-
-  .commission-summary-grid,
-  .commission-grid,
-  .client-detail-grid,
-  .modal-value-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .commission-card-footer {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .commission-card-footer button {
-    width: 100%;
-    justify-content: center;
-  }
-
-  .commission-modal-header {
-    align-items: flex-start;
-  }
-
-  .modal-heading-line {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .commission-danger-section {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .danger-delete-btn {
-    width: 100%;
-    justify-content: center;
-  }
-
-  .detail-section-header {
-    flex-direction: column;
-  }
-
-  .modal-payment-history-item {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .payment-delete-btn {
-    width: 100%;
-    justify-content: center;
-  }
-
-  .confirmation-actions {
-    grid-template-columns: 1fr;
   }
 }
 `;

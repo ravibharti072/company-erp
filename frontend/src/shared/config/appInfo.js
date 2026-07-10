@@ -1,6 +1,6 @@
 export const appInfo = {
-  appName: "AeroState Company ERP",
-  appVersion: "v1.4",
+  appName: "AeroState",
+  appVersion: "v1.5",
   appSubtitle: "Company ERP",
   logoPath: "/logo.png",
 
